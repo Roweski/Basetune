@@ -1,4 +1,4 @@
-# ─────────────────────────────────────────────────────────────────────────────
+﻿# ─────────────────────────────────────────────────────────────────────────────
 # IntuneGraphReport.psm1
 #
 # Report generation functions extracted from IntuneGraphCompare.psm1.
@@ -7,6 +7,20 @@
 #   Get-OverlapSummary   — duplicate / conflict overlap rows
 #   Get-HtmlReport       — HTML report from resolved diff rows
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Write-Log komt normaal van de host. Deze terugval zorgt dat de module ook
+# los importeerbaar is; binnen Basetune wint de echte Write-Log met
+# bestandslogging, want die bestaat dan al.
+if (-not (Get-Command Write-Log -ErrorAction SilentlyContinue)) {
+    function global:Write-Log {
+        param([string]$Label, [string]$Message, [string]$Level = 'INFO')
+        $color = switch ($Level) {
+            'ERROR' { 'Red' }    'WARN' { 'Yellow' }
+            'OK'    { 'Green' }  default { 'Gray' }
+        }
+        Write-Host "[$Level][$Label] $Message" -ForegroundColor $color
+    }
+}
 
 function Get-BaselineSummary {
     param(
@@ -71,7 +85,7 @@ function Get-BaselineSummary {
 #   TargetPolicies    — comma-separated list of target policy names
 #   TargetValues      — comma-separated list of target values (same order)
 #
-# Input  : path to diff.csv
+# Input  : array of resolved diff rows
 # Output : array of aggregated overlap rows, sorted by SourcePolicyName, Setting
 # ─────────────────────────────────────────────────────────────────────────────
 function Get-OverlapSummary {
@@ -145,7 +159,14 @@ function Get-HtmlReport {
     $settings = foreach ($g in $grouped) {
         $first  = $g.Group | Select-Object -First 1
         $issue  = $first.Issue
+
+        # Do not trust the first row for the aggregated status. One group can
+        # hold several target policies, and Group-Object does not order them:
+        # with two policies matching and one differing, whichever landed first
+        # decided the badge. Any differing target makes the whole group a Diff.
         $status = if ($issue -eq 'Conflict') {
+            'Diff'
+        } elseif (@($g.Group | Where-Object { $_.Status -eq 'Diff' }).Count -gt 0) {
             'Diff'
         } else {
             $first.Status
@@ -185,6 +206,20 @@ function Get-HtmlReport {
         $obj | ConvertTo-Json -Compress -Depth 3
     }
     $jsonData = if ($jsonRows) { "[" + ($jsonRows -join ",") + "]" } else { "[]" }
+
+    # ConvertTo-Json laat < > & ongemoeid, en deze JSON belandt letterlijk in een
+    # <script>-blok. Elke settingnaam bevat al > als padscheiding ("Defender >
+    # Attack Surface Reduction Rules > ..."), en waarden kunnen vrije tekst uit
+    # de tenant bevatten. Komt daar ooit de reeks </script in voor, dan sluit de
+    # browser het scriptblok af en is het rapport stuk. De \u-notatie is geldige
+    # JSON en levert na het parsen exact dezelfde string op.
+    # U+2028 en U+2029 zijn geldig in JSON maar niet in een JavaScript-literal.
+    $jsonData = $jsonData.
+        Replace('<', '\u003c').
+        Replace('>', '\u003e').
+        Replace('&', '\u0026').
+        Replace([string][char]0x2028, '\u2028').
+        Replace([string][char]0x2029, '\u2029')
 
     $totalSettings  = $settings.Count
     $countMatch     = @($settings | Where-Object { $_.Status -eq 'Match'   }).Count
@@ -228,6 +263,17 @@ function Get-HtmlReport {
         --logo-bg: #23272e;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Ruimte voor de scrollbalk vasthouden, ook als de pagina op het scherm
+       past. Zonder dit verspringt de gecentreerde inhoud een halve
+       scrollbalkbreedte zodra een filter weinig rijen overhoudt: bij Conflict
+       verdwijnt de balk, het venster wordt breder en alles schuift naar rechts.
+       scrollbar-gutter is de nette oplossing; de overflow-y: scroll erboven is
+       de terugval voor browsers die dat nog niet kennen. */
+    html { overflow-y: scroll; }
+    @supports (scrollbar-gutter: stable) {
+        html { overflow-y: auto; scrollbar-gutter: stable; }
+    }
     body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         background-color: var(--bg-body);
@@ -248,8 +294,7 @@ function Get-HtmlReport {
     .dark-mode .sun-icon { display: block; }
     .dark-mode .moon-icon { display: none; }
     .container { max-width: 1200px; width: 100%; }
-    header { margin-bottom: 32px; }
-    .main-logo { margin-bottom: 20px; margin-left: -12px; }
+    header { margin-bottom: 32px; padding-top: 8px; }
     h1 { font-size: 28px; font-weight: 600; margin: 10px 0 6px; letter-spacing: -0.8px; }
     .subtitle { font-size: 15px; color: var(--text-sub); margin-bottom: 28px; }
     .blue-text { color: var(--primary-blue); font-weight: 600; }
@@ -391,22 +436,6 @@ function Get-HtmlReport {
 
 <div class="container">
     <header>
-        <div class="main-logo">
-            <svg xmlns="http://www.w3.org/2000/svg" width="300" height="44" viewBox="0 0 200 32">
-                <rect x="0" y="0" width="32" height="32" rx="8" fill="var(--logo-bg)"/>
-                <g transform="translate(2.4, 3.2) scale(1.6)">
-                    <svg width="17" height="16" viewBox="0 0 17 16" fill="none" stroke="#1a6ef5" stroke-width="1.6">
-                        <rect x="2" y="3" width="5" height="10" rx="1"/>
-                        <rect x="10" y="3" width="5" height="10" rx="1"/>
-                        <line x1="7" y1="8" x2="10" y2="8" stroke-width="1.0"/>
-                        <circle cx="4.5" cy="5.5" r="1" fill="#1a6ef5" stroke="none"/>
-                        <circle cx="4.5" cy="8" r="1" fill="#f0a340" stroke="none"/>
-                        <circle cx="12.5" cy="5.5" r="1" fill="#1a6ef5" stroke="none"/>
-                    </svg>
-                </g>
-                <text x="40" y="25" fill="var(--text-main)" style="font-family: -apple-system, sans-serif; font-size: 26px; font-weight: 700; letter-spacing: -0.8px;">Basetune</text>
-            </svg>
-        </div>
         <h1>Baseline <span class="blue-text">Comparison</span> Report</h1>
         $(if ($SourceLabel -or $TargetLabel) {
             $src = if ($SourceLabel) { $SourceLabel } else { 'Source' }
@@ -612,13 +641,42 @@ function Get-HtmlReport {
         document.getElementById('filterIssue').value  = issue;
         document.getElementById('filterPolicy').value = '';
         document.getElementById('search').value = '';
-        document.querySelectorAll('.stat-card').forEach(function(c) { c.classList.remove('active'); });
-        var map = { 'Match':'s-match','Diff':'s-diff','Missing':'s-missing','Duplicate':'s-dup','Conflict':'s-conflict' };
-        var key = issue || status;
-        if (key && map[key]) {
-            document.querySelector('.' + map[key]).classList.add('active');
-        }
         applyFilters();
+    }
+
+    // De markering wordt afgeleid uit de filterstand, niet gezet bij het
+    // klikken. Anders blijft een tegel opgelicht zodra je daarna via de
+    // dropdowns of het zoekveld iets anders kiest.
+    //
+    // Een tegel is alleen actief als de view precies is wat die tegel
+    // oplevert: een enkele status of een enkel issue, zonder zoekterm en
+    // zonder policyfilter. Bij een combinatie licht er niets op, want geen
+    // enkele tegel dekt die dan.
+    function syncCards() {
+        document.querySelectorAll('.stat-card').forEach(function(c) {
+            c.classList.remove('active');
+        });
+
+        var search = document.getElementById('search').value.trim();
+        var status = document.getElementById('filterStatus').value;
+        var issue  = document.getElementById('filterIssue').value;
+        var policy = document.getElementById('filterPolicy').value;
+
+        if (search || policy) { return; }
+        if (status && issue)  { return; }
+
+        var cls;
+        if (!status && !issue) {
+            cls = 's-total';
+        } else {
+            var map = { 'Match':'s-match', 'Diff':'s-diff', 'Missing':'s-missing',
+                        'Duplicate':'s-dup', 'Conflict':'s-conflict' };
+            cls = map[status || issue];
+        }
+
+        if (!cls) { return; }
+        var el = document.querySelector('.' + cls);
+        if (el) { el.classList.add('active'); }
     }
 
     function applyFilters() {
@@ -638,6 +696,7 @@ function Get-HtmlReport {
 
         if (sortCol >= 0) applySort(false);
 
+        syncCards();
         currentPage = 1;
         renderPage();
     }
@@ -652,7 +711,9 @@ function Get-HtmlReport {
             if (i === col) th.classList.add(sortAsc ? 'sorted-asc' : 'sorted-desc');
         });
 
-        applySort(true);
+        // applySort(false): sorteren zonder te tekenen. De renderPage hieronder
+        // doet dat een keer, met currentPage al teruggezet naar 1.
+        applySort(false);
         currentPage = 1;
         renderPage();
     }

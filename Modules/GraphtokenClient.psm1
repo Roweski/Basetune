@@ -468,7 +468,20 @@ function Invoke-IntuneGraphRequest {
             return $response
         }
         catch {
-            $status = $_.Exception.Response.StatusCode.value__
+            # Not every failure is an HttpResponseException. Client-side
+            # timeouts and dropped connections throw HttpRequestException /
+            # TaskCanceledException, which have no .Response -- and because
+            # this module runs under Set-StrictMode -Version Latest, reading a
+            # non-existent property throws instead of returning $null. That
+            # turned every network hiccup into a confusing "The property
+            # 'Response' cannot be found" error AND skipped the retry logic
+            # entirely. Status 0 means transport-level failure: retryable.
+            $status = 0
+            $_exc = $_.Exception
+            if ($_exc.PSObject.Properties['Response'] -and $_exc.Response -and
+                $_exc.Response.PSObject.Properties['StatusCode']) {
+                try { $status = [int]$_exc.Response.StatusCode } catch { $status = 0 }
+            }
 
             # ─────────────────────────────────────────────
             # Throttling (429 / 503)
@@ -501,10 +514,11 @@ function Invoke-IntuneGraphRequest {
             # HTTP 500 / 502 / 504 — generic server faults
             # that are worth retrying with back-off
             # ─────────────────────────────────────────────
-            if ($status -in @(500, 502, 504) -and $retry -lt ($MaxRetries - 1)) {
+            if ($status -in @(0, 500, 502, 504) -and $retry -lt ($MaxRetries - 1)) {
                 $wait = [math]::Pow(2, $retry + 1)   # 2s, 4s …
                 $retry++
-                Write-Log $conn.Label "Server error (HTTP $status). Retrying in $wait sec... [$retry/$MaxRetries]" "WARN"
+                $_what = if ($status -eq 0) { "Network/transport error" } else { "Server error (HTTP $status)" }
+                Write-Log $conn.Label "$_what. Retrying in $wait sec... [$retry/$($MaxRetries - 1)]" "WARN"
                 Start-Sleep -Seconds $wait
                 continue
             }
@@ -533,7 +547,11 @@ function Get-GraphPagedResults {
     param(
         [Parameter(Mandatory)]$Connection,
         [Parameter(Mandatory)][string]$Uri,
-        [string]$ApiVersion = "v1.0"
+        [string]$ApiVersion = "v1.0",
+        # Heavy endpoints (configurationSettings) need more retries than the
+        # default. This was never passed through, so every paged call was
+        # capped at the default regardless of how expensive the endpoint is.
+        [int]$MaxRetries = 3
     )
 
     $results = [System.Collections.Generic.List[object]]::new()
@@ -542,7 +560,7 @@ function Get-GraphPagedResults {
 
     while ($next) {
         $conn = Update-Connection $conn 
-        $response = Invoke-IntuneGraphRequest -Connection $conn -Uri $next -ApiVersion $ApiVersion
+        $response = Invoke-IntuneGraphRequest -Connection $conn -Uri $next -ApiVersion $ApiVersion -MaxRetries $MaxRetries
 
         if ($response.value) {
             foreach ($i in $response.value) {

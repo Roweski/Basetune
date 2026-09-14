@@ -240,9 +240,15 @@ function Invoke-DefinitionDownload {
     $definitionsFile = Join-Path $DefinitionsPath 'settingDefinitions.json'
     $categoriesFile  = Join-Path $DefinitionsPath 'settingCategories.json'
 
+    # $top=500 keeps each page small. configurationSettings is one of the
+    # heaviest read endpoints in Graph beta (the full Settings Catalog); asking
+    # for the default page size regularly makes the backend exceed the gateway
+    # window, which surfaces as HTTP 504. Smaller pages also mean less lost
+    # work when a single page does fail.
     Write-Log "Download" "Downloading setting definitions..." "INFO"
     $definitions = Get-GraphPagedResults -Connection $Connection `
-        -Uri "$GraphBeta/deviceManagement/configurationSettings"
+        -Uri "$GraphBeta/deviceManagement/configurationSettings?`$top=500" `
+        -MaxRetries 5
     $definitions | ConvertTo-Json -Depth 20 | Out-File $definitionsFile -Encoding UTF8
     Write-Log "Download" "Saved to $definitionsFile ($($definitions.Count) definitions)" "OK"
 

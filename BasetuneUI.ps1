@@ -889,6 +889,7 @@ $global:btnCompare.Add_Click({
         } else {
             $diff | ForEach-Object {
                 [PSCustomObject]@{
+                    DefinitionId     = $_.DefinitionId
                     Setting          = $_.DefinitionId
                     Status           = $_.Status
                     Issue            = $_.Issue
@@ -903,9 +904,14 @@ $global:btnCompare.Add_Click({
 
         # Export
         Log '[INFO][Export] Exporting CSV files...'
+            # DefinitionId is exported so diff.csv is self-contained for
+            # downstream tooling. With definitions loaded, Setting holds the
+            # friendly path and the raw id would otherwise be lost — keywords
+            # such as TamperProtection or LocalAdminPassword only occur in the
+            # id, so anything matching on diff.csv would silently miss them.
         $resolved |
             Sort-Object { if ($_.SourcePolicyName) { "0_$($_.SourcePolicyName)" } else { '1_' } }, Setting |
-            Select-Object SourcePolicyName, Setting, Status, Issue, SourceValue, TargetPolicyName, TargetValue |
+            Select-Object SourcePolicyName, Setting, Status, Issue, SourceValue, TargetPolicyName, TargetValue, DefinitionId |
             Export-Csv "$($S.reportDir)\diff.csv"    -NoTypeInformation -Encoding UTF8 -Delimiter ';'
 
         Get-OverlapSummary  -Rows $resolved |

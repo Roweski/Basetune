@@ -266,13 +266,18 @@ function Resolve-RawValue {
     # Resolve each part individually and rejoin.
     if ($RawValue -match '\|') {
         $parts = $RawValue -split '\|'
+        $key   = $DefinitionId.Trim().ToLowerInvariant()
+        $def   = $global:SettingDefinitionLookup[$key]
         $resolved = $parts | ForEach-Object {
-            $key = $DefinitionId.Trim().ToLowerInvariant()
-            $def = $global:SettingDefinitionLookup[$key]
+            # $partValue is required: inside the nested Where-Object below, $_
+            # rebinds to the option object, so the original `$_.itemId -eq $_`
+            # compared an option against itself and never matched -- collection
+            # values were always rendered as raw itemIds.
+            $partValue = $_
             if ($def -and $def.options) {
-                $match = $def.options | Where-Object { $_.itemId -eq $_ } | Select-Object -First 1
-                if ($match) { $match.displayName } else { $_ }
-            } else { $_ }
+                $match = $def.options | Where-Object { $_.itemId -eq $partValue } | Select-Object -First 1
+                if ($match) { $match.displayName } else { $partValue }
+            } else { $partValue }
         }
         return $resolved -join " | "
     }
@@ -308,10 +313,30 @@ function Get-SettingPath {
 
     $key = $lookupId.Trim().ToLowerInvariant()
     $def = $global:SettingDefinitionLookup[$key]
-    $settingName = if ($def -and $def.displayName -and $def.displayName.Trim() -ne "") {
-        $def.displayName.Trim()
-    } else {
-        $null
+    # Graph sometimes returns a sub-element whose displayName is simply a copy
+    # of its internal ADMX element name, e.g.
+    #     "name":        "OSRecoveryKeyUsageDropDown_Name"
+    #     "displayName": "OSRecoveryKeyUsageDropDown_Name"
+    # That is not a label. Two things go wrong if it is treated as one: an
+    # internal identifier ends up in the customer report, and — because the
+    # child now has a name of its own — it no longer inherits the parent path,
+    # so Merge-EnabledWithChildren stops merging it into "Enabled: <value>".
+    #
+    # Only sub-elements are affected (rootDefinitionId pointing at another
+    # definition). A top-level setting keeps its displayName even when it
+    # happens to equal its name, so its own path segment is never lost.
+    $settingName = $null
+    if ($def -and $def.displayName -and $def.displayName.Trim() -ne "") {
+        $displayName = $def.displayName.Trim()
+        $internalName = if ($def.PSObject.Properties['name'] -and $def.name) { $def.name.Trim() } else { $null }
+        $isSubElement = ($def.PSObject.Properties['rootDefinitionId'] -and $def.rootDefinitionId -and
+                         $def.rootDefinitionId.Trim().ToLowerInvariant() -ne $key)
+
+        if ($isSubElement -and $internalName -and $displayName -eq $internalName) {
+            $settingName = $null      # placeholder label -> fall back to parent
+        } else {
+            $settingName = $displayName
+        }
     }
     $pathParts = [System.Collections.Generic.List[string]]::new()
     if ($def -and $def.categoryId -and $global:SettingDefinitionLookup.Count -gt 0) {
@@ -440,6 +465,78 @@ function Merge-EnabledWithChildren {
     $enabledLike  = @('enabled', 'true')
     $disabledLike = @('disabled', 'false')
     $toggleLike   = $enabledLike + $disabledLike
+    # --- Align children with every target policy ----------------------------
+    # The grouping below keys on TargetPolicyName, so a parent and its child
+    # only merge when both carry the same target policy. Two situations break
+    # that, and both leave the baseline sub-value stranded:
+    #
+    #   * The target has the parent Disabled. Intune omits children of a
+    #     disabled ADMX parent, so the child has no target policy at all.
+    #   * Several target policies configure the setting and only some of them
+    #     carry the child. The policies without it keep a bare parent row
+    #     rendering as "Enabled", while the policies with it render the full
+    #     "Enabled: <value>" -- the same baseline setting shown two ways.
+    #
+    # The source side of a child does not depend on which target policy it is
+    # compared against, so each target policy holding the parent gets a copy of
+    # every child, with an empty target value where that policy has none.
+    # Settings whose parent is absent from the target entirely are left alone:
+    # there is nothing to merge into, and they must stay Missing.
+    $aligned = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($sg in ($Resolved | Group-Object -Property Setting, SourcePolicyName)) {
+        $sgRows = @($sg.Group)
+
+        $sgParents = @($sgRows | Where-Object {
+            ($_.SourceValue -and $_.SourceValue.Trim().ToLower() -in $toggleLike) -or
+            ($_.TargetValue -and $_.TargetValue.Trim().ToLower() -in $toggleLike)
+        })
+        $sgChildren = @($sgRows | Where-Object { $_ -notin $sgParents })
+
+        # Target policies that actually carry the parent toggle.
+        $parentTargets = @($sgParents | Where-Object { $_.TargetPolicyName } |
+                           ForEach-Object { $_.TargetPolicyName } | Sort-Object -Unique)
+
+        if ($sgParents.Count -eq 0 -or $sgChildren.Count -eq 0 -or $parentTargets.Count -eq 0) {
+            foreach ($r in $sgRows) { $aligned.Add($r) }
+            continue
+        }
+
+        foreach ($r in $sgParents) { $aligned.Add($r) }
+
+        # One representative per child definition, for its source-side value.
+        $childTemplates = @($sgChildren | Group-Object DefinitionId | ForEach-Object { $_.Group[0] })
+
+        foreach ($t in $parentTargets) {
+            foreach ($tpl in $childTemplates) {
+                $existing = $sgChildren | Where-Object {
+                    $_.DefinitionId -eq $tpl.DefinitionId -and $_.TargetPolicyName -eq $t
+                } | Select-Object -First 1
+
+                if ($existing) {
+                    $aligned.Add($existing)
+                } else {
+                    $aligned.Add([PSCustomObject]@{
+                        DefinitionId     = $tpl.DefinitionId
+                        Setting          = $tpl.Setting
+                        Status           = 'Missing'
+                        Issue            = $tpl.Issue
+                        SourcePolicyName = $tpl.SourcePolicyName
+                        TargetPolicyName = $t
+                        SourceValue      = $tpl.SourceValue
+                        TargetValue      = $null
+                    })
+                }
+            }
+        }
+
+        # Child rows pointing at a target policy that has no parent toggle are
+        # not represented above; keep them so nothing is silently dropped.
+        foreach ($c in $sgChildren) {
+            if ($c.TargetPolicyName -and $c.TargetPolicyName -notin $parentTargets) { $aligned.Add($c) }
+        }
+    }
+    $Resolved = @($aligned)
+
     # Group by Setting + SourcePolicyName + TargetPolicyName
     $groups = $Resolved | Group-Object -Property Setting, SourcePolicyName, TargetPolicyName
     $output = [System.Collections.Generic.List[PSCustomObject]]::new()
@@ -488,14 +585,40 @@ function Merge-EnabledWithChildren {
         $targetEnabled  = $tv -in $enabledLike
         $targetDisabled = $tv -in $disabledLike
         foreach ($child in $childRows) {
-            $newSource = if ($sourceEnabled)       { "Enabled: $($child.SourceValue)" }
+            # "Enabled: <value>" only when there is a value. A parent that is
+            # Enabled while its sub-setting is not configured on that side
+            # would otherwise render as a trailing "Enabled: " -- which reads
+            # like a blank value rather than "on, sub-setting unset".
+            $newSource = if ($sourceEnabled)       { if ($child.SourceValue) { "Enabled: $($child.SourceValue)" } else { "Enabled" } }
                          elseif ($sourceDisabled)  { "Disabled" }
                          else                      { $child.SourceValue }
-            $newTarget = if ($targetEnabled)       { "Enabled: $($child.TargetValue)" }
+            $newTarget = if ($targetEnabled)       { if ($child.TargetValue) { "Enabled: $($child.TargetValue)" } else { "Enabled" } }
                          elseif ($targetDisabled)  { "Disabled" }
                          else                      { $child.TargetValue }
-            # Re-evaluate Status based on merged values
-            $mergedStatus = if ($newSource -eq $newTarget) { "Match" } else { $child.Status }
+            # Re-evaluate Status based on merged values.
+            #
+            # The previous version fell back to $child.Status when the merged
+            # values differed. That produced a FALSE MATCH whenever the parent
+            # toggle differed (baseline Enabled / tenant Disabled) while the
+            # child value happened to be identical: the child row was "Match",
+            # so the merged row inherited "Match" even though the effective
+            # configuration clearly differs -- and the parent row carrying the
+            # real "Diff" is consumed by this merge.
+            #
+            # Missing/Extra must survive: a setting absent from the target is
+            # not a value difference, and demoting it to "Diff" would hide the
+            # fact that it is not configured at all.
+            # Missing/Extra only survives when the merged row really has no
+            # counterpart. An adopted orphan does get one -- the parent exists
+            # in the target, it is simply Disabled -- so that row is a genuine
+            # difference, not an absent setting.
+            $mergedStatus = if ($newSource -eq $newTarget) {
+                                "Match"
+                            } elseif ($child.Status -in @('Missing','Extra') -and -not $newTarget) {
+                                $child.Status
+                            } else {
+                                "Diff"
+                            }
             $output.Add([PSCustomObject]@{
                 DefinitionId     = $child.DefinitionId
                 Setting          = $child.Setting
@@ -512,24 +635,37 @@ function Merge-EnabledWithChildren {
             $output.Add($p)
         }
     }
-    return $output.ToArray()
+    # --- Recompute Issue over the merged rows --------------------------------
+    # Add-IssueColumn runs before this merge and keys on DefinitionId, so it
+    # judged the parent and the child separately. A parent seen by three target
+    # policies as Enabled/Enabled/Disabled was Conflict, while its child, held
+    # by only the two Enabled policies with the same value, was Duplicate. The
+    # merge keeps the child row -- and with it the stale "Duplicate", even
+    # though the merged target values now read
+    # "Enabled: <value>" / "Enabled: <value>" / "Disabled".
+    #
+    # The merged rows are the ones the report and the CSV show, so the issue is
+    # derived from their target values here: several target policies with
+    # differing values is a Conflict, with identical values a Duplicate.
+    $final = @($output)
+    foreach ($ig in ($final | Group-Object -Property SourcePolicyName, DefinitionId)) {
+        $withTarget = @($ig.Group | Where-Object { $_.TargetPolicyName })
+        $policies   = @($withTarget | ForEach-Object { $_.TargetPolicyName } | Sort-Object -Unique)
+
+        $issue = if ($policies.Count -le 1) {
+            'None'
+        } else {
+            $values = @($withTarget | Sort-Object TargetPolicyName -Unique |
+                        ForEach-Object { [string]$_.TargetValue } | Sort-Object -Unique)
+            if ($values.Count -le 1) { 'Duplicate' } else { 'Conflict' }
+        }
+
+        foreach ($r in $ig.Group) { $r.Issue = $issue }
+    }
+
+    return $final
 }
-# ─────────────────────────────────────────────────────────────────────────────
-# MERGE COLLECTION SETTINGS
-#
-# SimpleSettingCollectionInstance produces N SettingObjects with the same
-# DefinitionId but different RawValues (one per collection item).
-# Compare-RawSettings treats each row independently, causing a cartesian
-# explosion and wrong Match/Diff/Issue results.
-#
-# This function collapses those N rows into ONE row per (PolicyId, DefinitionId)
-# by sorting the values and joining them with "|".
-# All other setting types (1 row per DefinitionId per policy) pass through
-# unchanged.
-#
-# Input  : array of SettingObjects as produced by ConvertTo-SettingObjects
-# Output : same array with collection rows collapsed
-# ─────────────────────────────────────────────────────────────────────────────
+
 function Merge-CollectionSettings {
     param(
         [Parameter(Mandatory)]
