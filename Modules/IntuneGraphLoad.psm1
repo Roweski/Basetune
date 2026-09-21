@@ -240,14 +240,19 @@ function Invoke-DefinitionDownload {
     $definitionsFile = Join-Path $DefinitionsPath 'settingDefinitions.json'
     $categoriesFile  = Join-Path $DefinitionsPath 'settingCategories.json'
 
-    # $top=500 keeps each page small. configurationSettings is one of the
-    # heaviest read endpoints in Graph beta (the full Settings Catalog); asking
-    # for the default page size regularly makes the backend exceed the gateway
-    # window, which surfaces as HTTP 504. Smaller pages also mean less lost
-    # work when a single page does fail.
+    # Do NOT add $top here. On configurationSettings, $top is treated as a
+    # limit on the result set rather than a page size: the service returns
+    # exactly that many items and omits @odata.nextLink, because it considers
+    # the request fully answered. Paging then stops at the first page and the
+    # rest of the catalog is silently lost ($top=500 capped this at 500 of
+    # ~4000+ definitions).
+    #
+    # Without $top the service applies its own page size and returns a
+    # nextLink per page, which Get-GraphPagedResults follows to the end.
+    # MaxRetries 5 covers the occasional HTTP 504 this heavy endpoint throws.
     Write-Log "Download" "Downloading setting definitions..." "INFO"
     $definitions = Get-GraphPagedResults -Connection $Connection `
-        -Uri "$GraphBeta/deviceManagement/configurationSettings?`$top=500" `
+        -Uri "$GraphBeta/deviceManagement/configurationSettings" `
         -MaxRetries 5
     $definitions | ConvertTo-Json -Depth 20 | Out-File $definitionsFile -Encoding UTF8
     Write-Log "Download" "Saved to $definitionsFile ($($definitions.Count) definitions)" "OK"
