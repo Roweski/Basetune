@@ -15,6 +15,65 @@
 #     Source             = "Source" | "Target"
 # }
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COLLECTION INSTANCE KEYS
+#
+# Some setting collections hold several independent instances under one
+# templated definition, e.g. firewall rules:
+#     vendor_msft_firewall_mdmstore_firewallrules_{firewallrulename}_protocol
+# Without a key, every rule in every policy shares that DefinitionId: rules of
+# one policy are joined into "17 | 6", and different rules in different
+# policies are reported as a Conflict on the "same" setting.
+#
+# The instance name is appended to the DefinitionId as "baseId@@instanceKey".
+# Nested instances append further keys, outermost first:
+#     baseId@@outerKey@@innerKey
+# Resolve-RawValue and Get-SettingPath strip the keys before looking up the
+# definition; Get-SettingPath shows them as path segments.
+# ─────────────────────────────────────────────────────────────────────────────
+$script:InstanceKeySeparator = '@@'
+
+function Get-CollectionInstanceKey {
+    param(
+        [string]$CollectionDefinitionId,
+        $Group
+    )
+    if (-not $CollectionDefinitionId -or -not $Group) { return $null }
+    $nameId = ($CollectionDefinitionId + '_name').ToLowerInvariant()
+    $nameChild = $Group.children | Where-Object {
+        $_.settingDefinitionId -and $_.settingDefinitionId.ToLowerInvariant() -eq $nameId
+    } | Select-Object -First 1
+    if (-not $nameChild -or -not $nameChild.simpleSettingValue) { return $null }
+    $value = "$($nameChild.simpleSettingValue.value)".Trim()
+    if (-not $value) { return $null }
+    # The separator must never occur inside a key.
+    return $value.Replace($script:InstanceKeySeparator, '@')
+}
+
+function Add-InstanceKey {
+    param(
+        [string]$DefinitionId,
+        [string]$InstanceKey
+    )
+    $sep = $script:InstanceKeySeparator
+    $i = $DefinitionId.IndexOf($sep)
+    if ($i -lt 0) { return $DefinitionId + $sep + $InstanceKey }
+    # Called from the outer collection after the inner one already added its
+    # key: insert this (outer) key first so the order reads outer -> inner.
+    return $DefinitionId.Substring(0, $i) + $sep + $InstanceKey + $DefinitionId.Substring($i)
+}
+
+function Split-InstanceKey {
+    param([string]$DefinitionId)
+    $sep = $script:InstanceKeySeparator
+    if (-not $DefinitionId) { return [PSCustomObject]@{ BaseId = $DefinitionId; Keys = @() } }
+    $i = $DefinitionId.IndexOf($sep)
+    if ($i -lt 0) { return [PSCustomObject]@{ BaseId = $DefinitionId; Keys = @() } }
+    $keys = @($DefinitionId.Substring($i + $sep.Length) -split [regex]::Escape($sep) | Where-Object { $_ })
+    return [PSCustomObject]@{ BaseId = $DefinitionId.Substring(0, $i); Keys = $keys }
+}
+
 function Get-RawSettings {
     param(
         [Parameter(Mandatory)]
@@ -99,9 +158,20 @@ function Get-RawSettings {
                         }
                     }
                 } else {
-                    # No key/value pattern — process normally
+                    # No key/value pattern. When the instance names itself
+                    # through a "<collection>_name" child (firewall rules), that
+                    # name becomes part of every DefinitionId below it, so each
+                    # instance is compared on its own instead of all instances
+                    # sharing one templated DefinitionId.
+                    $instanceKey = Get-CollectionInstanceKey -CollectionDefinitionId $defId -Group $group
                     foreach ($child in $group.children) {
                         foreach ($r in (Get-RawSettings -Instance $child -ParentDefinitionId $defId)) {
+                            if ($instanceKey) {
+                                $r.DefinitionId = Add-InstanceKey -DefinitionId $r.DefinitionId -InstanceKey $instanceKey
+                                if ($r.ParentDefinitionId) {
+                                    $r.ParentDefinitionId = Add-InstanceKey -DefinitionId $r.ParentDefinitionId -InstanceKey $instanceKey
+                                }
+                            }
                             $results.Add($r)
                         }
                     }
@@ -259,6 +329,9 @@ function Resolve-RawValue {
         [string]$DefinitionId,
         [string]$RawValue
     )
+    # Instance keys (firewall rule names) are not part of the definition id.
+    $DefinitionId = (Split-InstanceKey -DefinitionId $DefinitionId).BaseId
+
     # Key/value DefinitionIds contain '||' — they do not need to be resolved via options
     if ($DefinitionId -match '\|\|') { return $RawValue }
 
@@ -304,6 +377,12 @@ function Get-SettingPath {
     )
     # Key/value DefinitionIds use the format "realDefinitionId||keyVal"
     # The key is appended as an extra path segment at the end
+    # Instance keys ("baseId@@ruleName") are shown as path segments, never
+    # looked up as part of the definition id.
+    $split        = Split-InstanceKey -DefinitionId $DefinitionId
+    $instanceKeys = @($split.Keys)
+    $DefinitionId = $split.BaseId
+
     $keySegment = $null
     $lookupId   = $DefinitionId
     if ($DefinitionId -match '^(.+)\|\|(.+)$') {
@@ -332,7 +411,12 @@ function Get-SettingPath {
         $isSubElement = ($def.PSObject.Properties['rootDefinitionId'] -and $def.rootDefinitionId -and
                          $def.rootDefinitionId.Trim().ToLowerInvariant() -ne $key)
 
-        if ($isSubElement -and $internalName -and $displayName -eq $internalName) {
+        # Inside a keyed instance (firewall rule) plain labels such as
+        # "Enabled" or "Protocol" legitimately equal their internal name; only
+        # ADMX-style identifiers ("..._Name") are placeholders there.
+        $isPlaceholder = $isSubElement -and $internalName -and $displayName -eq $internalName -and
+                         -not ($instanceKeys.Count -gt 0 -and $internalName -notmatch '_')
+        if ($isPlaceholder) {
             $settingName = $null      # placeholder label -> fall back to parent
         } else {
             $settingName = $displayName
@@ -348,7 +432,19 @@ function Get-SettingPath {
             }
         }
     }
+    # Keyed instance without a usable label: derive one from the id suffix
+    # ("..._{firewallrulename}_protocol" -> "Protocol") so every field of a
+    # rule gets its own row instead of collapsing onto the parent path.
+    if (-not $settingName -and $instanceKeys.Count -gt 0 -and $def -and
+        $def.PSObject.Properties['rootDefinitionId'] -and $def.rootDefinitionId -and
+        $def.rootDefinitionId.Trim().ToLowerInvariant() -ne $key) {
+        $suffix = ($lookupId -split '_')[-1]
+        if ($suffix -and $suffix -notmatch '[{}]') {
+            $settingName = [System.Globalization.CultureInfo]::InvariantCulture.TextInfo.ToTitleCase($suffix.ToLowerInvariant())
+        }
+    }
     # Root group intermediate layer — only when child of another setting
+    $rootIndex = -1
     if ($def -and $def.rootDefinitionId) {
         $rootKey = $def.rootDefinitionId.Trim().ToLowerInvariant()
         if ($rootKey -ne $key) {
@@ -358,6 +454,7 @@ function Get-SettingPath {
                 if ($pathParts.Count -eq 0 -or $pathParts[$pathParts.Count - 1] -ne $rootName) {
                     $pathParts.Add($rootName)
                 }
+                $rootIndex = $pathParts.Count - 1
             }
         }
     }
@@ -367,6 +464,16 @@ function Get-SettingPath {
     # Append key segment as the last path part
     if ($keySegment -and ($pathParts.Count -eq 0 -or $pathParts[$pathParts.Count - 1] -ne $keySegment)) {
         $pathParts.Add($keySegment)
+    }
+    # Instance keys go right after the collection (root) segment:
+    #   Firewall > Firewall Rule Name > WMI_INBOUND > Protocol
+    # For the collection itself (no root layer) they are appended.
+    if ($instanceKeys.Count -gt 0) {
+        $insertAt = if ($rootIndex -ge 0) { $rootIndex + 1 } else { $pathParts.Count }
+        foreach ($ik in $instanceKeys) {
+            $pathParts.Insert($insertAt, $ik)
+            $insertAt++
+        }
     }
 
     return [PSCustomObject]@{
@@ -496,7 +603,14 @@ function Merge-EnabledWithChildren {
         $parentTargets = @($sgParents | Where-Object { $_.TargetPolicyName } |
                            ForEach-Object { $_.TargetPolicyName } | Sort-Object -Unique)
 
-        if ($sgParents.Count -eq 0 -or $sgChildren.Count -eq 0 -or $parentTargets.Count -eq 0) {
+        # Alignment copies the SOURCE side of a child to every target policy.
+        # Rows without a source policy (Extra) have no source side: grouping on
+        # an empty SourcePolicyName lumps every target policy together, so a
+        # child held by one policy would be fabricated as an empty "Missing"
+        # row for all the others -- which the merge then turns into a false
+        # "Diff" showing a bare "Enabled".
+        $noSource = -not $sgRows[0].SourcePolicyName
+        if ($noSource -or $sgParents.Count -eq 0 -or $sgChildren.Count -eq 0 -or $parentTargets.Count -eq 0) {
             foreach ($r in $sgRows) { $aligned.Add($r) }
             continue
         }
@@ -614,8 +728,10 @@ function Merge-EnabledWithChildren {
             # difference, not an absent setting.
             $mergedStatus = if ($newSource -eq $newTarget) {
                                 "Match"
-                            } elseif ($child.Status -in @('Missing','Extra') -and -not $newTarget) {
-                                $child.Status
+                            } elseif ($child.Status -eq 'Missing' -and -not $newTarget) {
+                                'Missing'
+                            } elseif ($child.Status -eq 'Extra' -and -not $newSource) {
+                                'Extra'
                             } else {
                                 "Diff"
                             }
