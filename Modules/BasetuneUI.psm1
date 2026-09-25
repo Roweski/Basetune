@@ -523,9 +523,10 @@ function Apply-ListFilter {
     $hint   = if ($Side -eq 'Source') { $global:txtSourceSearchHint } else { $global:txtTargetSearchHint }
 
     if ($search) {
-        $filtered = [System.Collections.ObjectModel.ObservableCollection[object]](
-            $items | Where-Object { $_.Name.ToLower().Contains($search) }
-        )
+        $filtered = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
+        foreach ($it in $items) {
+            if ($it.Name -and $it.Name.ToLower().Contains($search)) { $filtered.Add($it) }
+        }
         $lst.ItemsSource = $filtered
     } else {
         $lst.ItemsSource = $items
@@ -563,15 +564,48 @@ function Clear-UILog {
 }
 
 # ── Folder browser dialog ─────────────────────────────────────────────────────
+# Previously Shell.Application.BrowseForFolder with root "C:\": that dialog
+# could not leave drive C: (no other drives, no network shares) and had no
+# owner window, so it could open behind Basetune.
+#
+# Now:
+#   1. Microsoft.Win32.OpenFolderDialog (WPF, .NET 8 = PowerShell 7.4+):
+#      the modern Explorer-style picker, owned by the Basetune window.
+#   2. Fallback for older PowerShell 7 versions: WinForms FolderBrowserDialog
+#      (System.Windows.Forms is loaded by BasetuneUI.ps1).
+#
+#   InitialPath — optional folder to start in (ignored if it does not exist)
+#   Owner       — window that opens the picker. Must be the dialog it is opened
+#                 from (Tenant Configuration / Options): a modal picker owned by
+#                 the main window would re-enable the main window behind the
+#                 still-open dialog when it closes. Defaults to the main window.
 function Show-FolderBrowser {
-    $shell = New-Object -ComObject Shell.Application
-    # 0x40 = BIF_NEWDIALOGSTYLE (moderne, schone look)
-    $folder = $shell.BrowseForFolder(0, "", 0x40, "C:\")
-    
-    if ($folder) { 
-        return $folder.Self.Path 
+    param([string]$InitialPath = '', $Owner = $null)
+
+    $owner = if ($Owner) { $Owner } else { $global:window }
+    $start = if ($InitialPath -and (Test-Path -LiteralPath $InitialPath)) { $InitialPath } else { $null }
+
+    $wpfDialogType = 'Microsoft.Win32.OpenFolderDialog' -as [type]
+    if ($wpfDialogType) {
+        $dlg = $wpfDialogType::new()
+        $dlg.Title = 'Select folder'
+        if ($start) { $dlg.InitialDirectory = $start }
+        $ok = if ($owner) { $dlg.ShowDialog($owner) } else { $dlg.ShowDialog() }
+        if ($ok) { return $dlg.FolderName }
+        return $null
     }
-    return $null
+
+    $fb = [System.Windows.Forms.FolderBrowserDialog]::new()
+    try {
+        $fb.ShowNewFolderButton = $true
+        if ($start) { $fb.SelectedPath = $start }
+        if ($fb.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $fb.SelectedPath) {
+            return $fb.SelectedPath
+        }
+        return $null
+    } finally {
+        $fb.Dispose()
+    }
 }
 
 # ── Write loaded definitions back to main-thread cache ───────────────────────
@@ -591,30 +625,35 @@ function Update-DefinitionCache {
     $catsFile = "$JsonDefsPath\settingCategories.json"
     $defCache = $global:Cache.Definitions
 
+    # Same loader as the CLI and the compare runspace (IntuneGraphPolicies).
+    # A parse failure is logged instead of swallowed: a corrupt file used to
+    # produce "Loading..." followed by nothing at all.
     if (($Force -or -not $defCache.HasDefs) -and (Test-Path $defsFile)) {
         try {
             Write-UILog "[INFO][Definitions] Loading setting definitions..."
-            $defs   = Get-Content $defsFile -Raw | ConvertFrom-Json
-            $lookup = @{}
-            foreach ($d in $defs) {
-                if ($d.id) { $lookup[$d.id.Trim().ToLowerInvariant()] = $d }
-            }
+            $lookup = Import-SettingDefinitions -Path $defsFile
             $defCache.Lookup  = $lookup
-            $defCache.HasDefs = $true
+            $defCache.HasDefs = ($null -ne $lookup -and $lookup.Count -gt 0)
             Write-UILog "[OK][Definitions] $($lookup.Count) definitions cached"
-        } catch {}
+        } catch {
+            $defCache.Lookup  = $null
+            $defCache.HasDefs = $false
+            Write-UILog "[ERROR][Definitions] Cannot read settingDefinitions.json: $($_.Exception.Message). Download the definitions again."
+        }
     }
 
     if (($Force -or -not $defCache.HasCats) -and (Test-Path $catsFile)) {
         try {
             Write-UILog "[INFO][Categories] Loading setting categories..."
-            $cats   = Get-Content $catsFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            $catMap = @{}
-            foreach ($c in $cats) { $catMap[$c.id] = $c }
+            $catMap = Import-SettingCategories -Path $catsFile
             $defCache.CategoryById = $catMap
-            $defCache.HasCats      = $true
+            $defCache.HasCats      = ($null -ne $catMap -and $catMap.Count -gt 0)
             Write-UILog "[OK][Categories] $($catMap.Count) categories cached"
-        } catch {}
+        } catch {
+            $defCache.CategoryById = $null
+            $defCache.HasCats      = $false
+            Write-UILog "[ERROR][Categories] Cannot read settingCategories.json: $($_.Exception.Message). Download the definitions again."
+        }
     }
 }
 

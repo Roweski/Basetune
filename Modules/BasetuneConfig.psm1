@@ -82,10 +82,19 @@ function Clear-RequiredLabels {
 function Load-ConfigUI {
     $configPath = "$global:ScriptRoot\Config\Config.json"
     $global:tenantStore.Clear()
+    $global:configLoadError = $null
 
     if (Test-Path $configPath) {
         try {
             $global:cfg = Get-GraphConfig $configPath
+
+            # Invalid JSON used to be ignored silently: no tenants appeared
+            # and nothing said why. Report it, and remember it so Save-Config
+            # refuses to overwrite the (unreadable) file with an empty config.
+            if ($global:cfg.PSObject.Properties['__configError'] -and $global:cfg.__configError) {
+                $global:configLoadError = $global:cfg.__configError
+                Write-Log 'Config' "Config.json could not be read, no tenants loaded. Fix the file and restart Basetune. $($global:cfg.__configError)" 'ERROR'
+            }
 
             $cfgMaxThreads = if ($global:cfg.PSObject.Properties['settings'] -and $global:cfg.settings -and
                                   $global:cfg.settings.PSObject.Properties['maxthreads'] -and $global:cfg.settings.maxthreads) {
@@ -99,8 +108,18 @@ function Load-ConfigUI {
                 $global:cfg.settings.path } else { $null }
 
             if ($cfgPaths -and $cfgPaths.PSObject.Properties['report'] -and $cfgPaths.report -and $cfgPaths.report.Trim()) {
-                $global:reportBasePath  = $cfgPaths.report.Trim()
-                $global:savedPathReport = $cfgPaths.report.Trim()
+                # Same rules as the CLI: relative = relative to the Basetune
+                # folder. An invalid path is already repaired in Config.json
+                # by Get-GraphConfig (set to <Basetune>\Reports); this check
+                # is only a fallback for when that write failed.
+                $rp = Resolve-FolderPath -Path $cfgPaths.report -BasePath $global:ScriptRoot
+                if ($rp.Error) {
+                    Write-Log 'Config' "Report path in Config.json is not valid: $($rp.Error) Using default: $($global:reportBasePath). Set a valid path in Options." 'WARN'
+                    $global:savedPathReport = $global:reportBasePath
+                } else {
+                    $global:reportBasePath  = $rp.Path
+                    $global:savedPathReport = $rp.Path
+                }
             } else {
                 $global:savedPathReport = $global:reportBasePath
             }
@@ -111,8 +130,8 @@ function Load-ConfigUI {
                 }
             }
         } catch {
-            $msg = "[ERROR][Config] Failed to load Config.json: $($_.Exception.Message)"
-            try { Write-Log $msg } catch { Write-Host $msg }
+            $msg = "Failed to load Config.json: $($_.Exception.Message)"
+            try { Write-Log 'Config' $msg 'ERROR' } catch { Write-Host "[ERROR][Config] $msg" }
         }
     }
 
@@ -238,10 +257,17 @@ function Commit-TenantForm {
         $node.tenantId = $global:cfgTenantTenantId.Text.Trim()
         $node.clientId = $global:cfgTenantClientId.Text.Trim()
         if ($authMethod -eq 'ClientSecret') {
-            # Plaintext at this layer — Save-Config encrypts before writing
-            # to disk. See Get-TenantSecretFromForm for the dual-control
-            # (PasswordBox + reveal TextBox) read logic.
-            $node.clientSecret = (Get-TenantSecretFromForm).Trim()
+            # Encrypted right away: $global:tenantStore never holds a
+            # plaintext secret. New-GraphConnection decrypts it just-in-time
+            # for the connection test. See Get-TenantSecretFromForm for the
+            # dual-control (PasswordBox + reveal TextBox) read logic.
+            try {
+                $node.clientSecret = Protect-Secret ((Get-TenantSecretFromForm).Trim())
+            } catch {
+                Write-Log 'Config' "Failed to encrypt clientSecret: $($_.Exception.Message)" 'ERROR'
+                Show-Required 'ClientSecret'
+                return $false
+            }
         } else {
             $node.certThumbprint = $global:cfgTenantCertThumbprint.Text.Trim()
         }
@@ -269,9 +295,12 @@ function Commit-TenantForm {
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 function Save-Config {
+    if ($global:configLoadError) {
+        throw "Config.json could not be read when Basetune started, so saving now would overwrite it and lose your tenants. Fix Config.json and restart Basetune first. ($($global:configLoadError))"
+    }
     $configPath = "$global:ScriptRoot\Config\Config.json"
     $configDir  = Split-Path $configPath
-    $maxT       = if ($global:savedMaxThreads -match '^\d+$') { [int]$global:savedMaxThreads } else { 8 }
+    $maxT       = Get-ValidMaxThreads $global:savedMaxThreads
     $pathReport  = if ($global:savedPathReport  -and $global:savedPathReport.Trim())  { $global:savedPathReport.Trim()  } else { $global:reportBasePath }
 
     $out = [ordered]@{
@@ -281,12 +310,11 @@ function Save-Config {
         }
     }
 
-    # Build the tenants block. Important: $global:tenantStore holds PLAINTEXT
-    # secrets (decrypted at load by Get-GraphConfig). We must encrypt every
-    # ClientSecret tenant before writing to disk.
+    # Build the tenants block. $global:tenantStore holds ENCRYPTED secrets
+    # (Get-GraphConfig no longer decrypts; Commit-TenantForm encrypts).
     #
     # We rebuild each node as a fresh ordered hashtable so we don't mutate the
-    # in-memory store — the rest of the session keeps working against plaintext.
+    # in-memory store.
     $tenantsObj = [ordered]@{}
     foreach ($k in $global:tenantStore.Keys) {
         $src = $global:tenantStore[$k]
@@ -302,15 +330,15 @@ function Save-Config {
             }
         }
 
-        # Encrypt clientSecret for storage. Empty/missing secrets stay empty
-        # (decrypt-failure case: user copied config from another machine and
-        # hasn't re-entered the secret yet). Already-encrypted values get
-        # re-encrypted as-is — Protect-Secret on a plaintext is the only path.
-        if ($dst['authMethod'] -eq 'ClientSecret' -and $dst['clientSecret']) {
+        # Secrets in the store are already encrypted ("DPAPI:..."): written
+        # as-is, never decrypted. A plaintext value (should not happen any
+        # more) is encrypted first; if that fails the save is aborted rather
+        # than writing plaintext to disk.
+        if ($dst['clientSecret'] -and -not (Test-SecretEncrypted ([string]$dst['clientSecret']))) {
             try {
                 $dst['clientSecret'] = Protect-Secret ([string]$dst['clientSecret'])
             } catch {
-                Write-Log 'Config' "Failed to encrypt clientSecret for tenant '$($dst['displayName'])': $($_.Exception.Message)" 'ERROR'
+                throw "Failed to encrypt clientSecret for tenant '$($dst['displayName'])': $($_.Exception.Message)"
             }
         }
 

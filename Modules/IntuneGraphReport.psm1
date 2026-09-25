@@ -22,9 +22,35 @@ if (-not (Get-Command Write-Log -ErrorAction SilentlyContinue)) {
     }
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AGGREGATE STATUS
+#
+# One setting can have several result rows (one per target policy). Both the
+# HTML report and summary.csv collapse those into one status, and they must
+# agree. Rules, in order:
+#   - Issue Conflict            → Diff  (target policies disagree)
+#   - any row Diff              → Diff
+#   - any row Match             → Match (configured and equal in the target)
+#   - any row Missing           → Missing
+#   - otherwise                 → status of the first row
+# Previously summary.csv took the first row as-is while the HTML let any Diff
+# win, so the two could report different numbers for the same run.
+# ─────────────────────────────────────────────────────────────────────────────
+function script:Get-AggregateStatus {
+    param([array]$Group)
+    $first = $Group | Select-Object -First 1
+    if ($first.Issue -eq 'Conflict') { return 'Diff' }
+    $statuses = @($Group | ForEach-Object { $_.Status })
+    if ($statuses -contains 'Diff')    { return 'Diff' }
+    if ($statuses -contains 'Match')   { return 'Match' }
+    if ($statuses -contains 'Missing') { return 'Missing' }
+    return $first.Status
+}
+
 function Get-BaselineSummary {
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Rows
     )
 
@@ -42,17 +68,10 @@ function Get-BaselineSummary {
 
         foreach ($dg in $byDef) {
             $total++
-            $issue  = ($dg.Group | Select-Object -First 1).Issue
-            $status = ($dg.Group | Select-Object -First 1).Status
-
-            if ($issue -eq 'Conflict') {
-                $diff++
-            } else {
-                switch ($status) {
-                    'Match'   { $match++   }
-                    'Missing' { $missing++ }
-                    default   { $diff++    }
-                }
+            switch (Get-AggregateStatus -Group @($dg.Group)) {
+                'Match'   { $match++   }
+                'Missing' { $missing++ }
+                default   { $diff++    }
             }
         }
 
@@ -91,6 +110,7 @@ function Get-BaselineSummary {
 function Get-OverlapSummary {
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Rows
     )
 
@@ -141,6 +161,7 @@ function Get-OverlapSummary {
 function Get-HtmlReport {
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Rows,
 
         [Parameter(Mandatory)]
@@ -161,16 +182,9 @@ function Get-HtmlReport {
         $issue  = $first.Issue
 
         # Do not trust the first row for the aggregated status. One group can
-        # hold several target policies, and Group-Object does not order them:
-        # with two policies matching and one differing, whichever landed first
-        # decided the badge. Any differing target makes the whole group a Diff.
-        $status = if ($issue -eq 'Conflict') {
-            'Diff'
-        } elseif (@($g.Group | Where-Object { $_.Status -eq 'Diff' }).Count -gt 0) {
-            'Diff'
-        } else {
-            $first.Status
-        }
+        # hold several target policies, and Group-Object does not order them.
+        # Get-AggregateStatus applies the same rules as summary.csv.
+        $status = Get-AggregateStatus -Group @($g.Group)
 
         # Build unique target policy + value pairs for detail expand
         $targets = @($g.Group | Where-Object { $_.TargetPolicyName } |
@@ -438,9 +452,11 @@ function Get-HtmlReport {
     <header>
         <h1>Baseline <span class="blue-text">Comparison</span> Report</h1>
         $(if ($SourceLabel -or $TargetLabel) {
-            $src = if ($SourceLabel) { $SourceLabel } else { 'Source' }
-            $tgt = if ($TargetLabel) { $TargetLabel } else { 'Target' }
-            "<p class=`"subtitle`"><span style=`"color:var(--blue)`">$src</span> &nbsp;&rarr;&nbsp; <span style=`"color:var(--blue)`">$tgt</span> &nbsp;&middot;&nbsp; Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm') &nbsp;&middot;&nbsp; $totalSettings settings</p>"
+            # Tenant display names come from Config.json; encode them so a
+            # name with & or < cannot break the page.
+            $src = [System.Net.WebUtility]::HtmlEncode($(if ($SourceLabel) { $SourceLabel } else { 'Source' }))
+            $tgt = [System.Net.WebUtility]::HtmlEncode($(if ($TargetLabel) { $TargetLabel } else { 'Target' }))
+            "<p class=`"subtitle`"><span style=`"color:var(--primary-blue)`">$src</span> &nbsp;&rarr;&nbsp; <span style=`"color:var(--primary-blue)`">$tgt</span> &nbsp;&middot;&nbsp; Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm') &nbsp;&middot;&nbsp; $totalSettings settings</p>"
         } else {
             "<p class=`"subtitle`">Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm') &nbsp;&middot;&nbsp; $totalSettings settings</p>"
         })

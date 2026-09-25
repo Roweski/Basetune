@@ -1,3 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Export file names
+#
+# Intune allows several policies with the same name. Exporting them by name
+# alone made them overwrite each other, so one of them silently disappeared
+# from the export (and from any later offline compare). Names that collide —
+# case-insensitive, because Windows file names are — get the first 8
+# characters of the policy id appended: "Name_1a2b3c4d.json".
+#
+# Input : array of objects with Name and Id (Id may be empty for JSON sources)
+# Output: string array of file names (without folder), same order as input;
+#         $null for entries without a name
+# ─────────────────────────────────────────────────────────────────────────────
+function script:Get-ExportFileNames {
+    param([array]$Policies)
+    $safe = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in $Policies) {
+        if ($p.Name) { $safe.Add((([string]$p.Name) -replace '[\\/:*?"<>|]', '_')) } else { $safe.Add($null) }
+    }
+    $counts = @{}
+    foreach ($v in $safe) {
+        if (-not $v) { continue }
+        $k = $v.ToLowerInvariant()
+        $counts[$k] = 1 + $(if ($counts.ContainsKey($k)) { $counts[$k] } else { 0 })
+    }
+    $used  = @{}
+    $names = [System.Collections.Generic.List[string]]::new()
+    for ($i = 0; $i -lt $safe.Count; $i++) {
+        $base = $safe[$i]
+        if (-not $base) { $names.Add($null); continue }
+        if ($counts[$base.ToLowerInvariant()] -gt 1) {
+            $id    = [string]$Policies[$i].Id
+            $short = if ($id) { $id.Substring(0, [Math]::Min(8, $id.Length)) } else { "$($i + 1)" }
+            $base  = "${base}_$short"
+        }
+        # Last-resort guard: never hand out the same file name twice.
+        $candidate = $base; $n = 2
+        while ($used.ContainsKey($candidate.ToLowerInvariant())) { $candidate = "${base}_$n"; $n++ }
+        $used[$candidate.ToLowerInvariant()] = $true
+        $names.Add("$candidate.json")
+    }
+    return ,$names.ToArray()
+}
+
 function Export-PoliciesToJson {
     <#
     .SYNOPSIS
@@ -65,12 +109,26 @@ function Export-PoliciesToJson {
        $all
     }
 
+    $selected = @($selected)
     if ($selected.Count -eq 0) {
         Write-Log "Export" "No policies found matching '*$Filter*'." "WARN"
         return
     }
 
     Write-Log "Export" "$($selected.Count) policies found matching '*$Filter*'" "OK"
+
+    # File names are decided up front, over the whole selection, so policies
+    # that share a name get distinct files (see Get-ExportFileNames).
+    $fileNames = Get-ExportFileNames -Policies @($selected | ForEach-Object { [PSCustomObject]@{ Name = $_.name; Id = $_.id } })
+    $work = for ($i = 0; $i -lt $selected.Count; $i++) {
+        [PSCustomObject]@{ Policy = $selected[$i]; FileName = $fileNames[$i] }
+    }
+    $MaxThreads = Get-ValidMaxThreads $MaxThreads
+
+    # Network outage: the first worker that hits a network error raises this
+    # flag and the remaining workers skip their request, instead of every
+    # worker retrying for 30 s and logging on its own.
+    $netState = [hashtable]::Synchronized(@{ Down = $false })
 
     # ── Expand settings + write JSON in parallel ───────────────
     # Each parallel worker fetches its policy detail, builds the payload, and
@@ -105,18 +163,37 @@ function Export-PoliciesToJson {
     $skipped = 0
     $failed  = 0
 
-    $selected | ForEach-Object -Parallel {
-        $policy      = $_
+    $work | ForEach-Object -Parallel {
+        $policy      = $_.Policy
+        $fileName    = $_.FileName
         $modulesPath = $using:modulesPath
         $connection  = $using:Connection
         $graphBeta   = $using:GraphBeta
         $outputPath  = $using:OutputPath
+        $detail      = $null
 
         try {
-            Import-Module "$modulesPath\GraphTokenClient.psm1" -Force
+            # BasetuneHelpers is needed as well: Invoke-IntuneGraphRequest logs
+            # through Write-Log on retries, throttling and token refresh. Without
+            # it every retry failed with "Write-Log is not recognized" and the
+            # policy was reported as Failed. Import once per (reused) runspace.
+            if (-not (Get-Command Write-Log -ErrorAction SilentlyContinue)) {
+                Import-Module "$modulesPath\BasetuneHelpers.psm1"
+            }
+            if (-not (Get-Command Invoke-IntuneGraphRequest -ErrorAction SilentlyContinue)) {
+                Import-Module "$modulesPath\GraphtokenClient.psm1"
+            }
 
-            $detail = Invoke-IntuneGraphRequest -Connection $connection `
-                -Uri "$graphBeta/deviceManagement/configurationPolicies/$($policy.Id)?`$expand=settings"
+            $_net = $using:netState
+            if ($_net.Down) { throw "skipped (network unavailable)" }
+            try {
+                $detail = Invoke-IntuneGraphRequest -Connection $connection `
+                    -Uri "$graphBeta/deviceManagement/configurationPolicies/$($policy.Id)?`$expand=settings" `
+                    -NetworkRetries 1
+            } catch {
+                if (Test-GraphNetworkError $_.Exception) { $_net.Down = $true }
+                throw
+            }
 
             if (-not $detail.name) {
                 return [PSCustomObject]@{
@@ -155,14 +232,13 @@ function Export-PoliciesToJson {
                 }
             )
 
-            $safeName = $detail.name -replace '[\\/:*?"<>|]', '_'
-            $filePath = "$outputPath\$safeName.json"
-            $payload | ConvertTo-Json -Depth 50 | Out-File $filePath -Encoding UTF8
+            $filePath = Join-Path $outputPath $fileName
+            $payload | ConvertTo-Json -Depth 50 | Out-File -LiteralPath $filePath -Encoding UTF8
 
             [PSCustomObject]@{
                 Status = 'Written'
                 Name   = $detail.name
-                File   = "$safeName.json"
+                File   = $fileName
             }
         }
         catch {
@@ -199,7 +275,9 @@ function Export-PoliciesToJson {
         }
     }
 
-    Write-Log "Export" "Done. $written written, $skipped skipped, $failed failed. Output: $OutputPath" "OK"
+    $level = if ($failed -gt 0) { "WARN" } else { "OK" }
+    Write-Log "Export" "Done. $written written, $skipped skipped, $failed failed. Output: $OutputPath" $level
+    return [PSCustomObject]@{ Written = $written; Skipped = $skipped; Failed = $failed }
 }
 
 function Export-CachedPoliciesToJson {
@@ -216,8 +294,10 @@ function Export-CachedPoliciesToJson {
         Technologies, TemplateReference, Settings.
 
     .PARAMETER SelectedNames
-        Array of policy names to export. Only policies whose Name is in this
-        list are written to disk. Pass $null or an empty array to export all.
+        Optional, legacy. Array of policy names to export. Pass $null or an
+        empty array to export every object in -Policies. The UI now passes the
+        selected policy objects directly as -Policies, because selecting by
+        name also exported same-named policies that were not ticked.
 
     .PARAMETER OutputPath
         Folder where JSON files will be written.
@@ -225,6 +305,7 @@ function Export-CachedPoliciesToJson {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Policies,
 
         [Parameter(Mandatory=$false)]
@@ -251,11 +332,11 @@ function Export-CachedPoliciesToJson {
     }
 
     # Filter to selected names when provided
-    $toExport = if ($SelectedNames -and $SelectedNames.Count -gt 0) {
+    $toExport = @(if ($SelectedNames -and $SelectedNames.Count -gt 0) {
         $Policies | Where-Object { $SelectedNames -contains $_.Name }
     } else {
         $Policies
-    }
+    })
 
     if ($toExport.Count -eq 0) {
         Write-Log "Export" "No policies to export." "WARN"
@@ -268,7 +349,11 @@ function Export-CachedPoliciesToJson {
     $skipped = 0
     $failed  = 0
 
-    foreach ($policy in $toExport) {
+    # Unique file names over the whole selection (same-named policies).
+    $fileNames = Get-ExportFileNames -Policies @($toExport | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; Id = $_.PolicyId } })
+
+    for ($i = 0; $i -lt $toExport.Count; $i++) {
+        $policy = $toExport[$i]
         try {
             if (-not $policy.Name) {
                 Write-Log "Export" "Skipping policy with empty name (id: $($policy.PolicyId))." "WARN"
@@ -294,11 +379,11 @@ function Export-CachedPoliciesToJson {
                 }
             )
 
-            $safeName = $policy.Name -replace '[\\/:*?"<>|]', '_'
-            $filePath = "$OutputPath\$safeName.json"
-            $payload | ConvertTo-Json -Depth 50 | Out-File $filePath -Encoding UTF8
+            $fileName = $fileNames[$i]
+            $filePath = Join-Path $OutputPath $fileName
+            $payload | ConvertTo-Json -Depth 50 | Out-File -LiteralPath $filePath -Encoding UTF8
 
-            Write-Log "Export" "Saved: $safeName.json" "OK"
+            Write-Log "Export" "Saved: $fileName" "OK"
             $written++
         }
         catch {
@@ -307,7 +392,9 @@ function Export-CachedPoliciesToJson {
         }
     }
 
-    Write-Log "Export" "Done. $written written, $skipped skipped, $failed failed. Output: $OutputPath" "OK"
+    $level = if ($failed -gt 0) { "WARN" } else { "OK" }
+    Write-Log "Export" "Done. $written written, $skipped skipped, $failed failed. Output: $OutputPath" $level
+    return [PSCustomObject]@{ Written = $written; Skipped = $skipped; Failed = $failed }
 }
 
 Export-ModuleMember -Function @(

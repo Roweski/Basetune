@@ -105,28 +105,61 @@ $reportBasePath   = "$PSScriptRoot\Reports"
 # Load config once — derive all settings from it
 $rawCfg = $null
 try { $rawCfg = Get-GraphConfig "$PSScriptRoot\Config\Config.json" } catch {}
+# Invalid JSON / missing file used to surface only as "tenant not found".
+if ($rawCfg -and $rawCfg.PSObject.Properties['__configError'] -and $rawCfg.__configError) {
+    Write-Log "Config" "$($rawCfg.__configError)" "ERROR"
+    exit 1
+}
 if (-not $rawCfg) { $rawCfg = [PSCustomObject]@{ tenant = $null } }
 
-# MaxThreads: -MaxThreads param > config setting > default 8
+# MaxThreads: -MaxThreads param > config setting > default 8.
+# Always validated (1..32): 0 or a bad config value used to reach
+# ForEach-Object -ThrottleLimit and abort the load.
+# $MaxThreads is [int]: a non-numeric config value must go through the
+# validator first, not be assigned to it directly (that throws).
+$_mtRequested = $MaxThreads
 if ($MaxThreads -eq 0) {
-    $MaxThreads = if ($rawCfg.PSObject.Properties['settings'] -and $rawCfg.settings -and
-                      $rawCfg.settings.PSObject.Properties['maxthreads'] -and $rawCfg.settings.maxthreads) {
-        [int]$rawCfg.settings.maxthreads
+    $_mtRequested = if ($rawCfg.PSObject.Properties['settings'] -and $rawCfg.settings -and
+                        $rawCfg.settings.PSObject.Properties['maxthreads'] -and $rawCfg.settings.maxthreads) {
+        $rawCfg.settings.maxthreads
     } else { 8 }
 }
+$MaxThreads = Get-ValidMaxThreads $_mtRequested
 
 # Report path: config > default
 $_cfgPaths = if ($rawCfg.PSObject.Properties['settings'] -and $rawCfg.settings -and
                   $rawCfg.settings.PSObject.Properties['path'] -and $rawCfg.settings.path) {
     $rawCfg.settings.path } else { $null }
 if ($_cfgPaths -and $_cfgPaths.PSObject.Properties['report'] -and $_cfgPaths.report -and $_cfgPaths.report.Trim()) {
-    $_rp = $_cfgPaths.report.Trim()
-    $reportBasePath = if ([System.IO.Path]::IsPathRooted($_rp)) { $_rp } else { "$PSScriptRoot\$_rp" }
+    # Relative config paths are relative to the Basetune folder. An invalid
+    # path is already repaired in Config.json by Get-GraphConfig (set to the
+    # default Reports folder); this is only a fallback if that write failed.
+    $_rp = Resolve-FolderPath -Path $_cfgPaths.report -BasePath $PSScriptRoot
+    if ($_rp.Error) {
+        if ($PSCmdlet.ParameterSetName -eq 'Compare' -and -not $ReportPath) {
+            Write-Log "Config" "Report path in Config.json is not valid: $($_rp.Error) Using default: $reportBasePath" "WARN"
+        }
+    } else {
+        $reportBasePath = $_rp.Path
+    }
 }
 
-foreach ($dir in @($definitionsPath, $reportBasePath)) {
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+# -ReportPath overrides the config report path for this run. Validated here,
+# before any tenant connection, so a typo fails fast. Relative paths are
+# relative to the current folder.
+if ($PSCmdlet.ParameterSetName -eq 'Compare' -and $ReportPath) {
+    $_cwd = (Get-Location -PSProvider FileSystem).ProviderPath
+    $_rp  = Resolve-FolderPath -Path $ReportPath -BasePath $_cwd
+    if ($_rp.Error) {
+        Write-Log "Compare" "Parameter -ReportPath is not valid: $($_rp.Error)" "ERROR"
+        exit 1
+    }
+    $reportBasePath = $_rp.Path
 }
+
+# The report folder is created only when a compare actually writes a report
+# (see COMPARE + EXPORT), not for -Tenants / -Download / export runs.
+New-Item -ItemType Directory -Path $definitionsPath -Force | Out-Null
 
 $definitionsFile = "$definitionsPath\settingDefinitions.json"
 $categoriesFile  = "$definitionsPath\settingCategories.json"
@@ -157,8 +190,21 @@ if ($PSCmdlet.ParameterSetName -eq 'Compare') {
     # one. Each side may be either Online (authMethod set) or Offline (no
     # authMethod / 'None') — the later credential check and offline-path
     # check handle the rest per side.
-    if (-not $cfg.source) { $configErrors.Add("Source tenant '$SourceId' not found in Config.json.") }
-    if (-not $cfg.target) { $configErrors.Add("Target tenant '$TargetId' not found in Config.json.") }
+    # Resolve-TenantConfig returns $null both for an unknown id and for an
+    # entry marked invalid by Get-GraphConfig (an empty tenantId, clientId,
+    # clientSecret or certThumbprint). Tell the two apart.
+    $rawTenantExists = {
+        param($id)
+        [bool]($id -and $rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant -and $rawCfg.tenant.PSObject.Properties[$id])
+    }
+    if (-not $cfg.source) {
+        if (& $rawTenantExists $SourceId) { $configErrors.Add("Source tenant '$SourceId' is incomplete in Config.json (tenantId, clientId, clientSecret or certThumbprint is empty).") }
+        else                              { $configErrors.Add("Source tenant '$SourceId' not found in Config.json.") }
+    }
+    if (-not $cfg.target) {
+        if (& $rawTenantExists $TargetId) { $configErrors.Add("Target tenant '$TargetId' is incomplete in Config.json (tenantId, clientId, clientSecret or certThumbprint is empty).") }
+        else                              { $configErrors.Add("Target tenant '$TargetId' not found in Config.json.") }
+    }
 
     if ($configErrors.Count -gt 0) {
         foreach ($e in $configErrors) { Write-Log "Config" $e "ERROR" }
@@ -243,6 +289,10 @@ if ($Download) {
             Write-Log "Download" "Tenant '$Id' not found in Config.json. Use -Tenants to list all configured tenant ids." "ERROR"
             exit 1
         }
+        if ((Get-TenantMode $downloadConfig) -ne 'Online') {
+            Write-Log "Download" "Tenant '$Id' is an offline (JSON) tenant. Download needs an online tenant (ClientSecret or Certificate)." "ERROR"
+            exit 1
+        }
     } else {
         # No -Id: fall back to first online tenant in config
         if ($rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant) {
@@ -268,7 +318,7 @@ if ($Download) {
     }
 
     try {
-        Invoke-DefinitionDownload `
+        $null = Invoke-DefinitionDownload `
             -Connection      $downloadConnection `
             -DefinitionsPath $definitionsPath `
             -GraphBeta       $GraphBeta
@@ -318,7 +368,12 @@ if ($ExportId -ne "") {
         exit 1
     }
 
-    $outPath = $ExportPath.Trim()
+    $_ep = Resolve-FolderPath -Path $ExportPath -BasePath (Get-Location -PSProvider FileSystem).ProviderPath
+    if ($_ep.Error) {
+        Write-Log "Export" "Parameter -ExportPath is not valid: $($_ep.Error)" "ERROR"
+        exit 1
+    }
+    $outPath = $_ep.Path
     if ($outPath -match '^[A-Za-z]:\\?$') {
         Write-Log "Export" "Cannot export to a drive root ($outPath). Choose a folder." "ERROR"
         exit 1
@@ -356,7 +411,7 @@ if ($ExportId -ne "") {
 
     Write-Log "Export" "Exporting $exportLabel to $outPath..." "INFO"
     try {
-        Export-PoliciesToJson `
+        $exportResult = Export-PoliciesToJson `
             -Connection $exportConnection `
             -Filter      $ExportFilter `
             -OutputPath  $outPath `
@@ -367,6 +422,10 @@ if ($ExportId -ne "") {
         exit 1
     }
 
+    if ($exportResult -and $exportResult.Failed -gt 0) {
+        Write-Log "Done" "Export finished with $($exportResult.Failed) failed policies." "ERROR"
+        exit 1
+    }
     Write-Log "Done" "Export complete." "OK"
     exit
 }
@@ -476,92 +535,113 @@ if ($needTarget -and -not $targetConnection) {
 if ($connErrors) { exit 1 }
 $global:GraphConnection = if ($sourceConnection) { $sourceConnection } elseif ($targetConnection) { $targetConnection } else { $null }
 
+# A load that throws (e.g. policies that could not be fetched after all
+# retries) stops the run: comparing with an incomplete set would report the
+# missing policies' settings as Missing.
 Write-Log "Source" (Get-TenantInfoLog -Node $cfg.source -FallbackId $SourceId -Origin $sourceOrigin) "INFO"
-$sourceExpanded = Resolve-PolicySource `
-    -Origin $sourceOrigin -Connection $sourceConnection -Filter $SourceFilter `
-    -Label "Source" -GraphBeta $GraphBeta -ModulesPath $ModulesPath `
-    -JsonPath $resolvedSourcePath -TenantLabel $sourceLabel -MaxThreads $MaxThreads `
-    -LogFile $_logFile
+try {
+    $sourceExpanded = @(Resolve-PolicySource `
+        -Origin $sourceOrigin -Connection $sourceConnection -Filter $SourceFilter `
+        -Label "Source" -GraphBeta $GraphBeta -ModulesPath $ModulesPath `
+        -JsonPath $resolvedSourcePath -TenantLabel $sourceLabel -MaxThreads $MaxThreads `
+        -LogFile $_logFile)
+} catch {
+    if (-not $_.Exception.Data['BasetuneLogged']) { Write-Log "Source" "Load failed: $($_.Exception.Message)" "ERROR" }
+    exit 1
+}
 
-if ($sourceOrigin -eq 'Offline' -and (-not $sourceExpanded -or $sourceExpanded.Count -eq 0)) {
-    Write-Log "Source" "No policies loaded." "ERROR"
+# Online or offline: without source policies there is nothing to compare.
+if ($sourceExpanded.Count -eq 0) {
+    Write-Log "Source" "No policies loaded. Check the source filter ('$SourceFilter')." "ERROR"
     exit 1
 }
 
 Write-Log "Target" (Get-TenantInfoLog -Node $cfg.target -FallbackId $TargetId -Origin $targetOrigin) "INFO"
-$targetExpanded = Resolve-PolicySource `
-    -Origin $targetOrigin -Connection $targetConnection -Filter $TargetFilter `
-    -Label "Target" -GraphBeta $GraphBeta -ModulesPath $ModulesPath `
-    -JsonPath $resolvedTargetPath -TenantLabel $targetLabel -MaxThreads $MaxThreads `
-    -LogFile $_logFile
-
-if ($targetOrigin -eq 'Offline' -and (-not $targetExpanded -or $targetExpanded.Count -eq 0)) {
-    Write-Log "Target" "No policies loaded." "ERROR"
+try {
+    $targetExpanded = @(Resolve-PolicySource `
+        -Origin $targetOrigin -Connection $targetConnection -Filter $TargetFilter `
+        -Label "Target" -GraphBeta $GraphBeta -ModulesPath $ModulesPath `
+        -JsonPath $resolvedTargetPath -TenantLabel $targetLabel -MaxThreads $MaxThreads `
+        -LogFile $_logFile)
+} catch {
+    if (-not $_.Exception.Data['BasetuneLogged']) { Write-Log "Target" "Load failed: $($_.Exception.Message)" "ERROR" }
     exit 1
+}
+
+# An empty target is allowed (e.g. a fresh tenant, or a filter that matches
+# nothing): every baseline setting is then reported as Missing. Offline
+# folders without JSON files were already rejected by the path checks above.
+if ($targetExpanded.Count -eq 0) {
+    Write-Log "Target" "No target policies loaded (filter: '$TargetFilter'). All baseline settings will be reported as Missing." "WARN"
 }
 
 # ==============================================
 # DEFINITIONS LOOKUP
 # ==============================================
+# Same loader as the UI (IntuneGraphPolicies.psm1). A missing file means "not
+# downloaded yet" (raw ids in the output); a corrupt file is reported.
 
-$bHasDefinitions = Test-Path $definitionsFile
-$bHasCategories  = Test-Path $categoriesFile
-
-if ($bHasDefinitions) {
-    Write-Log "Definitions" "Loading setting definitions..." "INFO"
-    $settingDefinitions = Get-Content $definitionsFile -Raw | ConvertFrom-Json
-    $global:SettingDefinitionLookup = @{}
-    foreach ($def in $settingDefinitions) {
-        if (-not $def.id) { continue }
-        $global:SettingDefinitionLookup[$def.id.Trim().ToLowerInvariant()] = $def
-    }
-    Write-Log "Definitions" "$($global:SettingDefinitionLookup.Count) definitions loaded" "OK"
+$definitionLookup = $null
+$categoryById     = $null
+try {
+    if (Test-Path $definitionsFile) { Write-Log "Definitions" "Loading setting definitions..." "INFO" }
+    $definitionLookup = Import-SettingDefinitions -Path $definitionsFile
+} catch {
+    Write-Log "Definitions" "Cannot read settingDefinitions.json: $($_.Exception.Message). Run -Download again." "ERROR"
+}
+if ($definitionLookup) {
+    Write-Log "Definitions" "$($definitionLookup.Count) definitions loaded" "OK"
 } else {
     Write-Log "Definitions" "No definitions file found. Output will use raw settingDefinitionId." "WARN"
-    $global:SettingDefinitionLookup = @{}
-    $bHasCategories = $false
 }
 
-if ($bHasCategories) {
-    $settingCategories = Get-Content $categoriesFile -Raw -Encoding UTF8 | ConvertFrom-Json
-    $global:CategoryById = @{}
-    foreach ($cat in $settingCategories) { $global:CategoryById[$cat.id] = $cat }
-    Write-Log "Categories" "$($global:CategoryById.Count) categories loaded" "OK"
+if ($definitionLookup) {
+    try {
+        $categoryById = Import-SettingCategories -Path $categoriesFile
+    } catch {
+        Write-Log "Categories" "Cannot read settingCategories.json: $($_.Exception.Message). Run -Download again." "ERROR"
+    }
+}
+if ($categoryById) {
+    Write-Log "Categories" "$($categoryById.Count) categories loaded" "OK"
 } else {
     Write-Log "Categories" "No categories file found. Category paths will be skipped." "WARN"
-    $global:CategoryById = @{}
 }
-
-$global:bHasCategories     = $bHasCategories
-$global:CategoriesFilePath = $categoriesFile
-$global:CategoryPathCache  = @{}
-$global:CategoryCacheDirty = $false
 
 # ==============================================
 # COMPARE + EXPORT
 # ==============================================
 
 # Build report subfolder: Report\SOURCE_TARGET\YYYYMMDD_HHMMSS
-# -ReportPath overrides the config report path for this run
-if ($ReportPath) { $reportBasePath = $ReportPath }
+# $reportBasePath is already validated and normalized (config / -ReportPath),
+# see CONFIG above. Join-Path avoids a double backslash on a drive root (C:\).
 $safeSrcLabel  = ($sourceLabel -replace '[\\/:*?"<>|\s]','_')
 $safeTgtLabel  = ($targetLabel -replace '[\\/:*?"<>|\s]','_')
 $runStamp      = Get-Date -Format 'yyyyMMdd_HHmmss'
 $runPairFolder = "${safeSrcLabel}_${safeTgtLabel}"
-$runReportDir  = "$reportBasePath\$runPairFolder\$runStamp"
+$runReportDir  = Join-Path (Join-Path $reportBasePath $runPairFolder) $runStamp
 try {
     New-Item -ItemType Directory -Path $runReportDir -Force -ErrorAction Stop | Out-Null
 } catch {
     Write-Log "Compare" "Cannot create report folder '$runReportDir'. $($_.Exception.Message)" "ERROR"
     exit 1
 }
-$runReportFile = "$runReportDir\Report.html"
+$runReportFile = Join-Path $runReportDir 'Report.html'
 
-Invoke-BaselineCompare `
-    -SourcePolicies  $sourceExpanded `
-    -TargetPolicies  $targetExpanded `
-    -ExportPath      $runReportDir `
-    -ReportFile      $runReportFile `
-    -bHasDefinitions $bHasDefinitions `
-    -SourceLabel     $sourceLabel `
-    -TargetLabel     $targetLabel
+try {
+    $compareResult = Invoke-BaselineCompare `
+        -SourcePolicies     $sourceExpanded `
+        -TargetPolicies     $targetExpanded `
+        -ExportPath         $runReportDir `
+        -ReportFile         $runReportFile `
+        -DefinitionLookup   $definitionLookup `
+        -CategoryById       $categoryById `
+        -CategoriesFilePath $categoriesFile `
+        -Connection         $global:GraphConnection `
+        -SourceLabel        $sourceLabel `
+        -TargetLabel        $targetLabel
+} catch {
+    Write-Log "Compare" "Compare failed: $($_.Exception.Message)" "ERROR"
+    exit 1
+}
+if (-not $compareResult -or -not $compareResult.Success) { exit 1 }

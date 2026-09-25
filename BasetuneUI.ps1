@@ -26,7 +26,11 @@ $global:GraphBeta          = 'https://graph.microsoft.com/beta'
 $global:ModulesPath        = "$ScriptRoot\Modules"
 $global:definitionsPath    = "$ScriptRoot\Definitions"
 $global:reportBasePath     = "$ScriptRoot\Reports"
-function Get-DefaultPathReport { return $global:reportBasePath }
+# Fixed default (Basetune\Reports). $global:reportBasePath is overwritten by
+# the path from Config.json, so an emptied Report path in Options must not
+# fall back to that.
+$global:defaultReportPath  = $global:reportBasePath
+function Get-DefaultPathReport { return $global:defaultReportPath }
 $global:reportPath         = $null
 
 # Show "Download Definitions" label on the button when either setting file
@@ -204,7 +208,7 @@ $global:txtTargetSearch      = Find 'txtTargetSearch'
 $global:txtSourceSearchHint  = Find 'txtSourceSearchHint'
 $global:txtTargetSearchHint  = Find 'txtTargetSearchHint'
 
-# ── PolicyItem class (checkbox binding) ───────────────────────────────────────
+# ── BasetunePolicyItem class (checkbox binding) ───────────────────────────────────────
 # Stays as Add-Type C# rather than a PowerShell-native `class`. PS classes
 # expose properties as plain fields with no setter hook, so you can't fire
 # INotifyPropertyChanged.PropertyChanged from a property write — WPF then
@@ -212,14 +216,21 @@ $global:txtTargetSearchHint  = Find 'txtTargetSearchHint'
 #
 # Type-check guard: Add-Type re-compilation on an already-loaded type adds
 # startup latency and emits a "type already exists" warning in some PS hosts.
-# Skip if PolicyItem is already in the AppDomain (e.g. UI re-launched without
+# Skip if the type is already in the AppDomain (e.g. UI re-launched without
 # exiting the host process).
-if (-not ("PolicyItem" -as [type])) {
+#
+# Policy holds the loaded policy object itself. Compare and Export take the
+# ticked items' Policy directly instead of matching on Name — name matching
+# also pulled in unticked policies that happened to share the name. (Named
+# BasetunePolicyItem so an older PolicyItem type without this property, still
+# loaded in the same host, can never be picked up by mistake.)
+if (-not ("BasetunePolicyItem" -as [type])) {
     Add-Type @"
 using System.ComponentModel;
-public class PolicyItem : INotifyPropertyChanged {
+public class BasetunePolicyItem : INotifyPropertyChanged {
     private string _name;
     private bool   _isChecked = true;
+    public object Policy { get; set; }
     public string Name {
         get { return _name; }
         set { _name = value; OnPropertyChanged("Name"); }
@@ -260,6 +271,77 @@ public static class MemTrim {
 }
 "@
 }
+
+# ── Deferred memory cleanup ──────────────────────────────────────────────────
+# Compare produces large transient allocations (flat setting arrays, resolved
+# diffs, HTML payload). A forced, compacting gen2 collect gives that memory
+# back, but it blocks every thread while it runs. Queue it at ApplicationIdle
+# priority so it only runs after WPF has rendered the result, and skip it if
+# another job has started in the meantime.
+function Request-DeferredMemoryCleanup {
+    $global:window.Dispatcher.BeginInvoke(
+        [System.Windows.Threading.DispatcherPriority]::ApplicationIdle,
+        [System.Action]{
+            if ($global:CurrentJob) { return }
+            try {
+                [System.Runtime.GCSettings]::LargeObjectHeapCompactionMode = `
+                    [System.Runtime.GCLargeObjectHeapCompactionMode]::CompactOnce
+            } catch {}
+            [GC]::Collect(2, [System.GCCollectionMode]::Forced, $true, $true)
+            [GC]::WaitForPendingFinalizers()
+            [GC]::Collect(2, [System.GCCollectionMode]::Forced, $true, $true)
+            try { [MemTrim]::Trim() } catch {}
+        }
+    ) | Out-Null
+}
+
+# ── Network watcher ──────────────────────────────────────────────────────────
+# A request that was in flight when the network dropped only fails after its
+# timeout (30 s without data). Until then the log was silent. This watcher
+# checks the local network state every 2 s while a Load or Download is
+# running and says so immediately when the connection disappears (and when it
+# comes back). It only informs; the requests themselves still time out and
+# are retried/reported as before.
+#
+# "Up" = at least one active, non-loopback, non-tunnel adapter with a default
+# gateway. Virtual adapters without a gateway (Hyper-V internal switches etc.)
+# therefore don't count, so switching Wi-Fi off is noticed.
+function Test-NetworkUp {
+    try {
+        foreach ($ni in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            if ($ni.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) { continue }
+            if ($ni.NetworkInterfaceType -in @(
+                    [System.Net.NetworkInformation.NetworkInterfaceType]::Loopback,
+                    [System.Net.NetworkInformation.NetworkInterfaceType]::Tunnel)) { continue }
+            foreach ($g in $ni.GetIPProperties().GatewayAddresses) {
+                $a = "$($g.Address)"
+                if ($a -and $a -ne '0.0.0.0' -and $a -ne '::') { return $true }
+            }
+        }
+        return $false
+    } catch {
+        return $true   # can't tell: don't raise a false alarm
+    }
+}
+
+$global:NetWatchWasUp = $true
+$global:NetWatchTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$global:NetWatchTimer.Interval = [TimeSpan]::FromSeconds(2)
+$global:NetWatchTimer.Add_Tick({
+    $job = $global:CurrentJob
+    $watching = $job -and $job.Type -in @('Load', 'Download')
+    if (-not $watching) { $global:NetWatchWasUp = $true; return }
+
+    $up = Test-NetworkUp
+    if (-not $up -and $global:NetWatchWasUp) {
+        $maxWait = if ($job.Type -eq 'Download') { 60 } else { 30 }
+        Write-UILog "[WARN][Network] Network connection lost. Waiting for requests in progress to time out (max $maxWait seconds)..."
+    } elseif ($up -and -not $global:NetWatchWasUp) {
+        Write-UILog "[INFO][Network] Network connection restored."
+    }
+    $global:NetWatchWasUp = $up
+})
+$global:NetWatchTimer.Start()
 
 # ── Observable collections ────────────────────────────────────────────────────
 $global:sourceItems = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
@@ -411,7 +493,41 @@ function Start-Runspace {
             }
             # EndInvoke() returns the pipeline output — capture before Dispose().
             # OnDone reads it via $global:CurrentJob.Output (no more $script:activeOutput).
-            $job.Output = try { @($job.PS.EndInvoke($job.Handle)) } catch { @() }
+            #
+            # Errors: a terminating error in the work block makes EndInvoke
+            # throw, and non-terminating errors land in PS.Streams.Error. Both
+            # used to be discarded, so a failed Load showed "loaded 0 policies"
+            # and a failed Compare just "Done.". Collect them on $job.Errors,
+            # write them to the UI log + log file, and let OnDone react.
+            $job.Errors = [System.Collections.Generic.List[string]]::new()
+            $job.Fatal  = $false   # $true when the work block died (EndInvoke threw)
+            $job.Output = try {
+                @($job.PS.EndInvoke($job.Handle))
+            } catch {
+                $ex = $_.Exception
+                while ($ex -is [System.Management.Automation.MethodInvocationException] -and $ex.InnerException) {
+                    $ex = $ex.InnerException
+                }
+                $job.Errors.Add($ex.Message)
+                $job.Fatal = $true
+                @()
+            }
+            try {
+                foreach ($er in $job.PS.Streams.Error) {
+                    $m = "$er"
+                    if ($m -and -not $job.Errors.Contains($m)) { $job.Errors.Add($m) }
+                }
+            } catch {}
+            if ($job.Errors.Count -gt 0) {
+                $jobLabel = if ($job.Type) { $job.Type } else { 'Job' }
+                $maxShown = 10
+                foreach ($m in ($job.Errors | Select-Object -First $maxShown)) {
+                    Write-UILog "[ERROR][$jobLabel] $m"
+                }
+                if ($job.Errors.Count -gt $maxShown) {
+                    Write-UILog "[ERROR][$jobLabel] ... and $($job.Errors.Count - $maxShown) more error(s)."
+                }
+            }
             $job.PS.Dispose()
             $job.Runspace.Dispose()
             # OnDone snapshots $global:CurrentJob locally, THEN calls
@@ -444,35 +560,17 @@ function Start-Runspace {
                 # are cheap and don't warrant the ~50-200ms pause.
                 if ($jobType -in @('Compare','Load')) {
                     $Error.Clear()
-                    # Also clear the StringBuilder local — it just held the
-                    # final log drain (potentially MB of text). Without this
-                    # it stays alive until the Tick handler scope unwinds,
-                    # which is after the GC.Collect below.
                     $sb = $null
-                    # Re-arm LOH compaction — the mode resets to Default after
-                    # each collect, so we set it fresh here. JSON-derived
-                    # strings >85KB live on the LOH; without this they leave
-                    # permanent holes that inflate the working set.
-                    try {
-                        [System.Runtime.GCSettings]::LargeObjectHeapCompactionMode = `
-                            [System.Runtime.GCLargeObjectHeapCompactionMode]::CompactOnce
-                    } catch {}
-                    # Explicit gen2 + LOH collect. The default [GC]::Collect()
-                    # is generation 0/1 only — useless here, since the big
-                    # compare-time allocations (settingDefinitions strings,
-                    # resolved diff arrays, HTML payload) get promoted straight
-                    # to gen2 / LOH due to their size. Forced + blocking +
-                    # compacting is what actually returns memory.
-                    [GC]::Collect(2, [System.GCCollectionMode]::Forced, $true, $true)
-                    [GC]::WaitForPendingFinalizers()
-                    [GC]::Collect(2, [System.GCCollectionMode]::Forced, $true, $true)
-                    # Tell Windows to trim the working set now — otherwise the
-                    # pages freed by the GC stay attributed to this process
-                    # until the OS happens to need them elsewhere. Cosmetic
-                    # for the user (Task Manager looks sane), zero functional
-                    # cost (truly-needed pages just fault back in on access).
-                    try { [MemTrim]::Trim() } catch {}
                 }
+                # The forced full GC used to run right here, inside the tick
+                # handler — i.e. BEFORE WPF could draw the loaded policies or
+                # the "Report ready" line. A blocking, compacting gen2 collect
+                # with the definition cache in memory takes a noticeable
+                # moment, which is the pause users saw just before the policy
+                # list appeared. Load no longer triggers it at all (its
+                # allocations are modest); Compare schedules it for when the
+                # UI is idle, after the result is on screen.
+                if ($jobType -eq 'Compare') { Request-DeferredMemoryCleanup }
             }
         }
     })
@@ -481,15 +579,40 @@ function Start-Runspace {
 }
 
 # ── Cancel an in-progress runspace load ──────────────────────────────────────
+# PS.Stop() is synchronous: it waits until the pipeline has actually stopped,
+# which with ForEach-Object -Parallel means waiting for in-flight Graph calls.
+# That froze the window after clicking Cancel. Now the stop is started with
+# BeginStop() and the runspace is disposed later, by a small cleanup timer,
+# once the stop has completed. The UI is released immediately.
+$global:StoppingJobs = [System.Collections.Generic.List[object]]::new()
+$global:StopCleanupTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$global:StopCleanupTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+$global:StopCleanupTimer.Add_Tick({
+    foreach ($s in @($global:StoppingJobs)) {
+        if (-not $s.Handle -or $s.Handle.IsCompleted) {
+            try { if ($s.Handle) { $s.PS.EndStop($s.Handle) } } catch {}
+            try { $s.PS.Dispose() }       catch {}
+            try { $s.Runspace.Dispose() } catch {}
+            [void]$global:StoppingJobs.Remove($s)
+        }
+    }
+    if ($global:StoppingJobs.Count -eq 0) { $global:StopCleanupTimer.Stop() }
+})
+
 function Stop-ActiveRunspace {
     param([string]$Side = '')
 
     $job = $global:CurrentJob
     if ($job) {
-        if ($job.Timer)    { $job.Timer.Stop() }
-        if ($job.PS)       { try { $job.PS.Stop() }      catch {} }
-        if ($job.PS)       { try { $job.PS.Dispose() }   catch {} }
-        if ($job.Runspace) { try { $job.Runspace.Dispose() } catch {} }
+        if ($job.Timer) { $job.Timer.Stop() }
+        if ($job.PS) {
+            $stopHandle = $null
+            try { $stopHandle = $job.PS.BeginStop($null, $null) } catch {}
+            $global:StoppingJobs.Add(@{ PS = $job.PS; Runspace = $job.Runspace; Handle = $stopHandle })
+            $global:StopCleanupTimer.Start()
+        } elseif ($job.Runspace) {
+            try { $job.Runspace.Dispose() } catch {}
+        }
         # Match the Tick-handler cleanup: actively release heavy refs so
         # the cancelled job doesn't linger via the timer closure.
         $job.PS       = $null
@@ -544,15 +667,10 @@ function Get-UITenantLabel {
     return 'Basetune'
 }
 
-# Resolve MaxThreads: live Options textbox > saved config value > default 8.
+# Resolve MaxThreads from the saved setting, validated (1..32, default 8).
+# 0 or garbage used to reach ForEach-Object -ThrottleLimit and abort the load.
 function Get-MaxThreads {
-    if ($global:txtMaxThreads -and $global:txtMaxThreads.Text -match '^\d+$') {
-        return [int]$global:txtMaxThreads.Text
-    }
-    if ($global:savedMaxThreads -match '^\d+$') {
-        return [int]$global:savedMaxThreads
-    }
-    return 8
+    return Get-ValidMaxThreads $global:savedMaxThreads
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -635,28 +753,45 @@ function Load-Side {
         Set-LogCallback { param($msg) $LogQueue.Enqueue($msg) }
         if ($S.LogFile) { try { Set-LogFile -Path $S.LogFile } catch {} }
 
-        $conn = $null
-        if ($S.Origin -eq 'Online' -and $S.TenantNode) {
-            $conn = New-GraphConnection -Config $S.TenantNode -Label $S.Side
+        # Every outcome ends with a status marker. OnDone trusts only that
+        # marker: no marker (runspace died) or Success = $false means the load
+        # failed, whatever else is in the output.
+        try {
+            $conn = $null
+            if ($S.Origin -eq 'Online' -and $S.TenantNode) {
+                $conn = New-GraphConnection -Config $S.TenantNode -Label $S.Side
+                if (-not $conn) {
+                    [PSCustomObject]@{ __type = 'status'; Success = $false; Reason = 'connection' }
+                    return
+                }
+            }
+
+            $policies = @(Resolve-PolicySource `
+                -Origin      $S.Origin `
+                -Connection  $conn `
+                -Filter      $S.Filter `
+                -Label       $S.Side `
+                -GraphBeta   $S.GraphBeta `
+                -ModulesPath $S.ModulesPath `
+                -JsonPath    $S.JsonPath `
+                -TenantLabel $S.TenantLabel `
+                -MaxThreads  $S.MaxThreads `
+                -LogQueue    $LogQueue `
+                -LogFile     $S.LogFile)
+
+            # Emit connection first so the UI can stash it without scanning the
+            # whole result; policies follow as the rest of the pipeline output.
+            [PSCustomObject]@{ __type = 'connection'; conn = $conn }
+            $policies
+            [PSCustomObject]@{ __type = 'status'; Success = $true; Reason = '' }
+        } catch {
+            # Errors that were already reported in detail (expand failures)
+            # are not repeated as "Load failed: ...".
+            if (-not $_.Exception.Data['BasetuneLogged']) {
+                Write-Log $S.Side "Load failed: $($_.Exception.Message)" 'ERROR'
+            }
+            [PSCustomObject]@{ __type = 'status'; Success = $false; Reason = 'error' }
         }
-
-        $policies = Resolve-PolicySource `
-            -Origin      $S.Origin `
-            -Connection  $conn `
-            -Filter      $S.Filter `
-            -Label       $S.Side `
-            -GraphBeta   $S.GraphBeta `
-            -ModulesPath $S.ModulesPath `
-            -JsonPath    $S.JsonPath `
-            -TenantLabel $S.TenantLabel `
-            -MaxThreads  $S.MaxThreads `
-            -LogQueue    $LogQueue `
-            -LogFile     $S.LogFile
-
-        # Emit connection first so the UI can stash it without scanning the
-        # whole result; policies follow as the rest of the pipeline output.
-        [PSCustomObject]@{ __type = 'connection'; conn = $conn }
-        $policies
     }
 
     Start-Runspace -Work $work -Shared $shared -OnDone {
@@ -668,19 +803,26 @@ function Load-Side {
         Set-Busy $false
 
         $result   = @($job.Output)
-        $connObj  = $result | Where-Object { $_.__type -eq 'connection' } | Select-Object -First 1
-        $policies = @($result | Where-Object { $_.__type -ne 'connection' })
+        $connObj  = $result | Where-Object { $_.PSObject.Properties['__type'] -and $_.__type -eq 'connection' } | Select-Object -First 1
+        $status   = $result | Where-Object { $_.PSObject.Properties['__type'] -and $_.__type -eq 'status' } | Select-Object -Last 1
+        $policies = @($result | Where-Object { -not $_.PSObject.Properties['__type'] })
+        $loadOk   = ($status -and $status.Success -and -not $job.Fatal)
 
-        if ($connObj -and $connObj.conn) {
+        # A failed load leaves the side empty: never show a partial list that
+        # the user could then compare as if it were complete.
+        if (-not $loadOk) { $policies = @() }
+
+        if ($loadOk -and $connObj -and $connObj.conn) {
             if ($job.LoadSide -eq 'Source') { $global:sourceConnection = $connObj.conn }
             else                            { $global:targetConnection = $connObj.conn }
         }
 
         foreach ($p in ($policies | Sort-Object { $_.name })) {
             if (-not $p.name) { continue }
-            $item           = [PolicyItem]::new()
+            $item           = [BasetunePolicyItem]::new()
             $item.Name      = $p.name
             $item.IsChecked = $true
+            $item.Policy    = $p
             $job.LoadItems.Add($item)
         }
 
@@ -695,18 +837,22 @@ function Load-Side {
         $global:progressBar.IsIndeterminate = $false
         Update-Counts
 
-        # Distinguish "loaded zero" from "failed to connect". For an Online
-        # load, a $null connection in the runspace output means New-GraphConnection
-        # returned nothing (bad credentials, network error) — log as a failed
-        # load. For Offline, a $null connection is normal (JSON-only), so an
-        # empty list just means the JSON had no policies.
-        $sideLabel    = $job.LoadSide
-        $count        = $job.LoadItems.Count
-        $onlineFailed = ($job.LoadOrigin -eq 'Online' -and $connObj -and -not $connObj.conn)
-        if ($onlineFailed) {
+        # Distinguish "loaded zero" from "failed". The status marker from the
+        # work block says which: Reason 'connection' = no token (credentials,
+        # network), anything else = an error that is already in the log above.
+        $sideLabel = $job.LoadSide
+        $count     = $job.LoadItems.Count
+        if ($loadOk -and $count -eq 0) {
+            # Not an error (the tenant or folder was read fine), but
+            # "Successfully loaded 0" read like success. Say what happened.
+            $filterNote = if ($job.LoadFilter) { " matching the filter '$($job.LoadFilter)'" } else { '' }
+            Write-UILog "`nNo $sideLabel policies found$filterNote. Check the filter, the tenant or the JSON folder."
+        } elseif ($loadOk) {
+            Write-UILog "`nSuccessfully loaded $count $sideLabel policies."
+        } elseif ($status -and $status.Reason -eq 'connection') {
             Write-UILog "`nFailed to load policies from $sideLabel. Check credentials in the configuration."
         } else {
-            Write-UILog "`nSuccesfully loaded $count $sideLabel policies."
+            Write-UILog "`nFailed to load policies from $sideLabel. See the errors above."
         }
     } -Context @{
         Type       = 'Load'
@@ -714,6 +860,7 @@ function Load-Side {
         LoadSide   = $Side
         LoadItems  = $Items
         LoadOrigin = $origin   # 'Online' / 'Offline' — for OnDone failure detection
+        LoadFilter = $filter   # shown in the "no policies found" message
     }
 }
 
@@ -738,11 +885,13 @@ $global:btnTargetLoad.Add_Click({
 # no new Graph calls needed, which is why this must stay in the UI process.
 # ═════════════════════════════════════════════════════════════════════════════
 $global:btnCompare.Add_Click({
-    $selSource = @($global:sourceItems | Where-Object { $_.IsChecked } | ForEach-Object { $_.Name })
-    $selTarget = @($global:targetItems | Where-Object { $_.IsChecked } | ForEach-Object { $_.Name })
+    # Take the ticked items' own policy objects. Matching on name used to
+    # include every policy with that name, ticked or not.
+    $srcFiltered = @($global:sourceItems | Where-Object { $_.IsChecked -and $_.Policy } | ForEach-Object { $_.Policy })
+    $tgtFiltered = @($global:targetItems | Where-Object { $_.IsChecked -and $_.Policy } | ForEach-Object { $_.Policy })
 
-    if ($selSource.Count -eq 0 -or $selTarget.Count -eq 0) {
-        Clear-UILog '`nSelect at least one source and one target policy.'
+    if ($srcFiltered.Count -eq 0 -or $tgtFiltered.Count -eq 0) {
+        Clear-UILog "Select at least one source and one target policy."
         return
     }
 
@@ -751,9 +900,6 @@ $global:btnCompare.Add_Click({
     $global:btnCompare.IsEnabled    = $false
     # btnOpenReport disable / restore is handled centrally by Set-Busy
 
-    $srcFiltered = @($global:sourceExpanded | Where-Object { $selSource -contains $_.name })
-    $tgtFiltered = @($global:targetExpanded | Where-Object { $selTarget -contains $_.name })
-
     # Build timestamped report subfolder: Report\SOURCE_TARGET\YYYYMMDD_HHMMSS
     $runSrcLabel = Get-UITenantLabel $global:cmbSourceTenant.SelectedValue
     $runTgtLabel = Get-UITenantLabel $global:cmbTargetTenant.SelectedValue
@@ -761,7 +907,8 @@ $global:btnCompare.Add_Click({
     $safeRunTgt    = $runTgtLabel -replace '[\\/:*?"<>|\s]','_'
     $runStamp      = Get-Date -Format 'yyyyMMdd_HHmmss'
     $runPairFolder = "${safeRunSrc}_${safeRunTgt}"
-    $runReportDir  = "$($global:reportBasePath)\$runPairFolder\$runStamp"
+    # Join-Path: no double backslash when the report path is a drive root (C:\).
+    $runReportDir  = Join-Path (Join-Path $global:reportBasePath $runPairFolder) $runStamp
 
     # Create the report folder up front so write-failures surface before the
     # runspace launches — otherwise the user sees a half-finished compare
@@ -775,17 +922,13 @@ $global:btnCompare.Add_Click({
         return
     }
 
-    $runReportFile = "$runReportDir\Report.html"
+    $runReportFile = Join-Path $runReportDir 'Report.html'
     $global:reportPath = $runReportFile
 
-    # Compare needs the heaviest $Shared payload: filtered policies, def caches,
-    # report paths, labels, and the current Graph connections (used to fetch
-    # category info on-demand when a setting's category isn't already cached).
-    # No MaxThreads — compare runs purely in-memory and writes serially.
-    #
-    # Note: the runspace gets its own copy of $Shared. The `cached*` field
-    # names here are the runspace-side wire format; the UI-side source of
-    # truth is $global:Cache.Definitions.
+    # Compare runs purely in-memory on the cached policies. The runspace gets
+    # the UI definition cache (so settingDefinitions.json is parsed at most
+    # once per session), the report paths and labels, and the Graph
+    # connections (used to fetch unknown categories on demand).
     $defCache = $global:Cache.Definitions
     $shared = @{
         reportDir         = $runReportDir
@@ -807,145 +950,72 @@ $global:btnCompare.Add_Click({
         Import-Module "$($S.ModulesPath)\IntuneGraphModules.psd1" -Force
         Set-LogCallback { param($msg) $LogQueue.Enqueue($msg) }
         if ($S.LogFile) { try { Set-LogFile -Path $S.LogFile } catch {} }
-        function Log {
-            param([string]$m)
-            $LogQueue.Enqueue($m)
-            # Also mirror to the log file so disk-log mirrors what the UI shows.
-            # Best-effort: file errors never break the runspace.
-            if ($S.LogFile -and $m) {
-                $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-                try { Add-Content -Path $S.LogFile -Value "$stamp $m" -Encoding UTF8 } catch {}
-            }
-        }
 
-        $_defsFile = "$($S.defsPath)\settingDefinitions.json"
-        $_catsFile = "$($S.defsPath)\settingCategories.json"
+        try {
+            $_defsFile = "$($S.defsPath)\settingDefinitions.json"
+            $_catsFile = "$($S.defsPath)\settingCategories.json"
 
-        # Load definitions if not cached
-        $hasDefs = $S.cachedHasDefs
-        $defLookup = $S.cachedDefLookup
-        if ($hasDefs) {
-            Log "[OK][Definitions] $($defLookup.Count) definitions loaded from cache"
-        } elseif (Test-Path $_defsFile) {
-            try {
-                Log '[INFO][Definitions] Loading setting definitions...'
-                $defs   = Get-Content $_defsFile -Raw | ConvertFrom-Json
-                $lookup = @{}
-                foreach ($d in $defs) { if ($d.id) { $lookup[$d.id.Trim().ToLowerInvariant()] = $d } }
-                $hasDefs   = $true
-                $defLookup = $lookup
-                Log "[OK][Definitions] $($lookup.Count) definitions loaded"
-            } catch { Log "[WARN][Definitions] Failed to load: $_" }
-        }
-        if (-not $hasDefs) { Log '[WARN][Definitions] Definition file not found. Using settingDefinitionId' }
-
-        # Load categories if not cached
-        $hasCats = $S.cachedHasCats
-        $catMap  = $S.cachedCatById
-        if ($hasCats) {
-            Log "[OK][Categories] $($catMap.Count) categories loaded from cache"
-        } elseif (Test-Path $_catsFile) {
-            try {
-                $cats  = Get-Content $_catsFile -Raw -Encoding UTF8 | ConvertFrom-Json
-                $catMap = @{}
-                foreach ($c in $cats) { $catMap[$c.id] = $c }
-                $hasCats = $true
-                Log "[OK][Categories] $($catMap.Count) categories loaded"
-            } catch { Log "[WARN][Categories] Failed to load: $_" }
-        }
-        if (-not $hasCats) { Log '[WARN][Categories] No categories — paths will be skipped' }
-
-        # Wire into compare globals
-        $global:SettingDefinitionLookup = if ($hasDefs) { $defLookup } else { @{} }
-        $global:CategoryById            = if ($hasCats) { $catMap    } else { @{} }
-        $global:bHasCategories          = $hasCats
-        $global:CategoriesFilePath      = $_catsFile
-        $global:CategoryPathCache       = @{}
-        $global:CategoryCacheDirty      = $false
-        $global:GraphConnection         = if ($S.sourceConnection) { $S.sourceConnection } `
-                                          elseif ($S.targetConnection) { $S.targetConnection } `
-                                          else { $null }
-
-        # Flatten + compare
-        Log "[INFO][Compare] Flattening $($S.srcFiltered.Count) source policies..."
-        $srcFlat = @(foreach ($p in $S.srcFiltered) {
-            if ($p.Settings) { ConvertTo-SettingObjects -Policy $p -Source 'Source' }
-        })
-        $srcFlat = @(Merge-CollectionSettings -Settings $srcFlat)
-
-        Log "[INFO][Compare] Flattening $($S.tgtFiltered.Count) target policies..."
-        $tgtFlat = @(foreach ($p in $S.tgtFiltered) {
-            if ($p.Settings) { ConvertTo-SettingObjects -Policy $p -Source 'Target' }
-        })
-        $tgtFlat = @(Merge-CollectionSettings -Settings $tgtFlat)
-
-        Log '[INFO][Compare] Comparing...'
-        $diff = Compare-RawSettings -Source $srcFlat -Target $tgtFlat
-        $diff = Add-IssueColumn -Diff $diff
-
-        $resolved = if ($hasDefs) {
-            $r = Resolve-DiffForExport -Diff $diff
-            Merge-EnabledWithChildren -Resolved $r
-        } else {
-            $diff | ForEach-Object {
-                [PSCustomObject]@{
-                    DefinitionId     = $_.DefinitionId
-                    Setting          = $_.DefinitionId
-                    Status           = $_.Status
-                    Issue            = $_.Issue
-                    SourcePolicyName = $_.SourcePolicyName
-                    TargetPolicyName = $_.TargetPolicyName
-                    SourceValue      = $_.SourceValue
-                    TargetValue      = $_.TargetValue
+            # ── Definitions: UI cache first, otherwise parse the file once ──
+            $defLookup = $null
+            if ($S.cachedHasDefs -and $S.cachedDefLookup) {
+                $defLookup = $S.cachedDefLookup
+                Write-Log 'Definitions' "$($defLookup.Count) definitions loaded from cache" 'OK'
+            } elseif (Test-Path $_defsFile) {
+                try {
+                    Write-Log 'Definitions' 'Loading setting definitions...' 'INFO'
+                    $defLookup = Import-SettingDefinitions -Path $_defsFile
+                    Write-Log 'Definitions' "$($defLookup.Count) definitions loaded" 'OK'
+                } catch {
+                    $defLookup = $null
+                    Write-Log 'Definitions' "Cannot read settingDefinitions.json: $($_.Exception.Message)" 'WARN'
                 }
             }
-        }
-        Log '[OK][Done] Compared policies'
+            if (-not $defLookup) { Write-Log 'Definitions' 'Definition file not found. Using settingDefinitionId' 'WARN' }
 
-        # Export
-        Log '[INFO][Export] Exporting CSV files...'
-            # DefinitionId is exported so diff.csv is self-contained for
-            # downstream tooling. With definitions loaded, Setting holds the
-            # friendly path and the raw id would otherwise be lost — keywords
-            # such as TamperProtection or LocalAdminPassword only occur in the
-            # id, so anything matching on diff.csv would silently miss them.
-        $resolved |
-            Sort-Object { if ($_.SourcePolicyName) { "0_$($_.SourcePolicyName)" } else { '1_' } }, Setting |
-            Select-Object SourcePolicyName, Setting, Status, Issue, SourceValue, TargetPolicyName, TargetValue, DefinitionId |
-            Export-Csv "$($S.reportDir)\diff.csv"    -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+            # ── Categories ──
+            $catMap = $null
+            if ($S.cachedHasCats -and $S.cachedCatById) {
+                $catMap = $S.cachedCatById
+                Write-Log 'Categories' "$($catMap.Count) categories loaded from cache" 'OK'
+            } elseif (Test-Path $_catsFile) {
+                try {
+                    $catMap = Import-SettingCategories -Path $_catsFile
+                    Write-Log 'Categories' "$($catMap.Count) categories loaded" 'OK'
+                } catch {
+                    $catMap = $null
+                    Write-Log 'Categories' "Cannot read settingCategories.json: $($_.Exception.Message)" 'WARN'
+                }
+            }
+            if (-not $catMap) { Write-Log 'Categories' 'No categories — paths will be skipped' 'WARN' }
 
-        Get-OverlapSummary  -Rows $resolved |
-            Export-Csv "$($S.reportDir)\overlap.csv" -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+            $conn = if ($S.sourceConnection) { $S.sourceConnection } elseif ($S.targetConnection) { $S.targetConnection } else { $null }
 
-        Get-BaselineSummary -Rows $resolved |
-            Export-Csv "$($S.reportDir)\summary.csv" -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-        Log '[OK][Done] diff.csv exported'
+            # ── Same pipeline as the CLI ──
+            $result = Invoke-BaselineCompare `
+                -SourcePolicies     $S.srcFiltered `
+                -TargetPolicies     $S.tgtFiltered `
+                -ExportPath         $S.reportDir `
+                -ReportFile         $S.reportFile `
+                -DefinitionLookup   $defLookup `
+                -CategoryById       $catMap `
+                -CategoriesFilePath $_catsFile `
+                -Connection         $conn `
+                -SourceLabel        $S.reportSourceLabel `
+                -TargetLabel        $S.reportTargetLabel
 
-        Log '[INFO][HTML] Exporting HTML report...'
-        Get-HtmlReport -Rows $resolved -OutputPath $S.reportFile `
-            -SourceLabel $S.reportSourceLabel -TargetLabel $S.reportTargetLabel
-        Log '[OK][Done] Report generated'
-
-        if ($global:CategoryCacheDirty -and $global:CategoriesFilePath) {
-            try {
-                $global:CategoryById.Values |
-                    ConvertTo-Json -Depth 10 |
-                    Out-File $global:CategoriesFilePath -Encoding UTF8
-            } catch {}
-        }
-
-        # Emit cache contents back to the UI so the next compare doesn't
-        # need to re-parse settingDefinitions.json. Wrapped in a marker
-        # object so the UI's OnDone can pick it out of the pipeline output.
-        # This runs in the runspace, so the UI thread never blocks on JSON
-        # parsing — the parse already happened above (regel ~830) or was
-        # skipped because $S.cachedHasDefs was already true.
-        [PSCustomObject]@{
-            __type    = 'cache'
-            defLookup = if ($hasDefs) { $defLookup } else { $null }
-            catMap    = if ($hasCats) { $catMap    } else { $null }
-            hasDefs   = $hasDefs
-            hasCats   = $hasCats
+            # Emit cache contents back to the UI so the next compare doesn't
+            # need to re-parse settingDefinitions.json.
+            [PSCustomObject]@{
+                __type    = 'cache'
+                defLookup = $defLookup
+                catMap    = $catMap
+                hasDefs   = ($null -ne $defLookup -and $defLookup.Count -gt 0)
+                hasCats   = ($null -ne $catMap -and $catMap.Count -gt 0)
+            }
+            [PSCustomObject]@{ __type = 'status'; Success = [bool]$result.Success }
+        } catch {
+            Write-Log 'Compare' "Compare failed: $($_.Exception.Message)" 'ERROR'
+            [PSCustomObject]@{ __type = 'status'; Success = $false }
         }
     }
 
@@ -955,13 +1025,12 @@ $global:btnCompare.Add_Click({
         Set-Busy $false
         Update-Counts
 
-        # Pick up the cache emitted by the runspace at its final step. This
-        # is far cheaper than re-running Update-DefinitionCache here: the
-        # JSON file was already parsed in the runspace (or wasn't needed
-        # because the UI cache was already populated). Just rehome the
-        # references. Zero UI-thread blocking — these are hashtables, not
-        # disk reads.
-        $cacheOut = @($job.Output) | Where-Object { $_.__type -eq 'cache' } | Select-Object -First 1
+        $out      = @($job.Output)
+        $cacheOut = $out | Where-Object { $_.PSObject.Properties['__type'] -and $_.__type -eq 'cache' }  | Select-Object -First 1
+        $status   = $out | Where-Object { $_.PSObject.Properties['__type'] -and $_.__type -eq 'status' } | Select-Object -Last 1
+
+        # Pick up the cache emitted by the runspace: rehome the references,
+        # no disk reads on the UI thread.
         if ($cacheOut) {
             $defCache = $global:Cache.Definitions
             if ($cacheOut.hasDefs -and -not $defCache.HasDefs) {
@@ -976,11 +1045,12 @@ $global:btnCompare.Add_Click({
             }
         }
 
-        if (Test-Path $global:reportPath) {
+        $ok = ($status -and $status.Success -and -not $job.Fatal)
+        if ($ok -and (Test-Path $global:reportPath)) {
             $global:btnOpenReport.IsEnabled = $true
             Write-UILog "`nReport ready."
         } else {
-            Write-UILog "`nDone."
+            Write-UILog "`nCompare failed. See the errors above."
         }
     } -Context @{ Type = 'Compare'; Side = '' }
 })
@@ -1002,9 +1072,11 @@ function Start-ExportRunspace {
     $expanded = if ($Side -eq 'Source') { $global:sourceExpanded } else { $global:targetExpanded }
     $items    = if ($Side -eq 'Source') { $global:sourceItems    } else { $global:targetItems    }
 
-    # Collect checked policy names — the user's current selection drives what gets exported
-    $selectedNames = @($items | Where-Object { $_.IsChecked } | ForEach-Object { $_.Name })
-    if ($selectedNames.Count -eq 0) {
+    # Collect the checked policies themselves — the user's current selection
+    # drives what gets exported. (Selecting by name also exported unticked
+    # policies that shared a name with a ticked one.)
+    $selectedPolicies = @($items | Where-Object { $_.IsChecked -and $_.Policy } | ForEach-Object { $_.Policy })
+    if ($selectedPolicies.Count -eq 0) {
         Clear-UILog "[ERROR][Export] No $Side policies selected. Check at least one policy to export."
         return
     }
@@ -1024,11 +1096,10 @@ function Start-ExportRunspace {
 
     Set-Busy $true -Side "${Side}Export"
     $global:btnCompare.IsEnabled = $false
-    Clear-UILog "[INFO][Export] Exporting $($selectedNames.Count) of $($expanded.Count) $exportLabel policies..."
+    Clear-UILog "[INFO][Export] Exporting $($selectedPolicies.Count) of $(@($expanded).Count) $exportLabel policies..."
 
     $shared = @{
-        Policies      = $expanded
-        SelectedNames = $selectedNames
+        Policies      = $selectedPolicies
         SideLabel     = $Side
         OutputPath    = $exportFolder
     }
@@ -1040,11 +1111,10 @@ function Start-ExportRunspace {
         if ($S.LogFile) { try { Set-LogFile -Path $S.LogFile } catch {} }
 
         try {
-            Export-CachedPoliciesToJson `
+            $r = Export-CachedPoliciesToJson `
                 -Policies      $S.Policies `
-                -SelectedNames $S.SelectedNames `
                 -OutputPath    $S.OutputPath
-            [PSCustomObject]@{ Success = $true }
+            [PSCustomObject]@{ Success = ($null -ne $r -and $r.Failed -eq 0) }
         } catch {
             Write-Log 'Export' "Export failed: $($_.Exception.Message)" 'ERROR'
             [PSCustomObject]@{ Success = $false }
@@ -1056,7 +1126,7 @@ function Start-ExportRunspace {
         Set-Busy $false
         Update-Counts
         $result = @($job.Output) | Select-Object -Last 1
-        if ($result -and $result.Success) {
+        if ($result -and $result.Success -and -not $job.Fatal) {
             Write-UILog "`nExport complete."
         } else {
             Write-UILog "`nExport failed."
@@ -1166,11 +1236,17 @@ $global:btnOpenDownload.Add_Click({
         }
 
         try {
-            Invoke-DefinitionDownload `
+            $dl = Invoke-DefinitionDownload `
                 -Connection      $conn `
                 -DefinitionsPath $S.DefinitionsPath `
                 -GraphBeta       $S.GraphBeta `
                 -LogQueue        $LogQueue
+            # Hand the freshly built lookups to the UI (see OnDone).
+            [PSCustomObject]@{
+                __type    = 'cache'
+                defLookup = $dl.DefinitionLookup
+                catMap    = $dl.CategoryById
+            }
             [PSCustomObject]@{ Success = $true }
         } catch {
             Write-Log 'Download' "Download failed: $($_.Exception.Message)" 'ERROR'
@@ -1190,9 +1266,24 @@ $global:btnOpenDownload.Add_Click({
         # actually completed. Without this guard, a failed download silently
         # reloads the OLD cached files and logs "definitions cached", which
         # makes it look like fresh data was loaded.
-        $result = @($job.Output) | Select-Object -Last 1
-        if ($result -and $result.Success) {
-            Update-DefinitionCache -JsonDefsPath $global:definitionsPath -Force
+        $result   = @($job.Output) | Select-Object -Last 1
+        $cacheOut = @($job.Output) | Where-Object { $_.PSObject.Properties['__type'] -and $_.__type -eq 'cache' } | Select-Object -First 1
+        if ($result -and $result.Success -and -not $job.Fatal) {
+            # Refresh the in-memory cache with the lookups the runspace built
+            # from the downloaded data. Previously Update-DefinitionCache
+            # re-read and parsed the 60+ MB file HERE, on the UI thread, which
+            # froze the window for several seconds after every download.
+            $defCache = $global:Cache.Definitions
+            if ($cacheOut -and $cacheOut.defLookup -and $cacheOut.defLookup.Count -gt 0) {
+                $defCache.Lookup  = $cacheOut.defLookup
+                $defCache.HasDefs = $true
+                Write-UILog "[OK][Definitions] $($cacheOut.defLookup.Count) definitions cached"
+            }
+            if ($cacheOut -and $cacheOut.catMap -and $cacheOut.catMap.Count -gt 0) {
+                $defCache.CategoryById = $cacheOut.catMap
+                $defCache.HasCats      = $true
+                Write-UILog "[OK][Categories] $($cacheOut.catMap.Count) categories cached"
+            }
             Write-UILog "`nDownload complete."
         } else {
             Write-UILog "`nDownload failed."
@@ -1393,7 +1484,7 @@ function Open-ConfigWindow {
     })
 
     $global:btnBrowseTenantPath.Add_Click({
-        $p = Show-FolderBrowser
+        $p = Show-FolderBrowser -InitialPath $global:cfgTenantPath.Text.Trim() -Owner $cfgWindow
         if ($p) { $global:cfgTenantPath.Text = $p; Set-UnsavedChanges }
     })
 
@@ -1510,12 +1601,25 @@ function Open-ConfigWindow {
         } else {
             # Pre-fill the secret into BOTH dual-control sides. The
             # PasswordBox is what the user sees by default; the TextBox is
-            # the revealed alternate. Decrypt-failed secrets arrive here as
-            # empty strings (Get-GraphConfig already logged the reason).
-            $secretValue = if ($node -is [System.Collections.IDictionary]) {
+            # the revealed alternate.
+            #
+            # The store holds the secret ENCRYPTED; it is decrypted here, only
+            # for the tenant that was just selected, and only into the form
+            # controls. If it cannot be decrypted (other Windows user or PC)
+            # the field stays empty so a new secret can be entered.
+            $storedSecret = if ($node -is [System.Collections.IDictionary]) {
                 if ($node.Contains('clientSecret') -and $node['clientSecret']) { $node['clientSecret'] } else { '' }
             } else {
-                if ($node.clientSecret) { $node.clientSecret } else { '' }
+                if ($node.PSObject.Properties['clientSecret'] -and $node.clientSecret) { $node.clientSecret } else { '' }
+            }
+            $secretValue = ''
+            if ($storedSecret) {
+                $secretValue = Unprotect-Secret ([string]$storedSecret)
+                if ($null -eq $secretValue) {
+                    $secretValue = ''
+                    $lblName = if ($node.displayName) { $node.displayName } else { $key }
+                    Write-Log 'Config' "Cannot decrypt the clientSecret for '$lblName' (encrypted by another Windows user or on another PC). Enter the secret again." 'ERROR'
+                }
             }
             if ($global:cfgTenantClientSecret)      { $global:cfgTenantClientSecret.Password = $secretValue }
             if ($global:cfgTenantClientSecretShown) { $global:cfgTenantClientSecretShown.Text = $secretValue }
@@ -1548,8 +1652,8 @@ function Open-ConfigWindow {
 
         # ── Connection test (sync) ──────────────────────────────────────────
         # Runs BEFORE Save-Config writes to disk. The just-committed tenant
-        # lives in $global:tenantStore[$editingTenantKey] with plaintext
-        # secret — exactly what New-GraphConnection expects.
+        # lives in $global:tenantStore[$editingTenantKey] with its secret
+        # encrypted; New-GraphConnection decrypts it just-in-time.
         #
         # Sync (not runspace) because Tenant Configuration is a modal dialog:
         # blocking the dialog during the 2-5 second token request is the
@@ -1632,7 +1736,14 @@ function Open-ConfigWindow {
             } else {
                 Clear-TenantSelection
             }
-        } catch { $global:btnSaveConfig.IsEnabled = $true }
+        } catch {
+            # Used to be swallowed silently: the user believed the config was
+            # saved while Config.json was never written (e.g. file locked by sync).
+            $global:suppressEvents = $false
+            $global:btnSaveConfig.IsEnabled = $true
+            Write-Log 'Config' "Saving Config.json failed: $($_.Exception.Message)" 'ERROR'
+            [System.Windows.MessageBox]::Show("Saving the configuration failed:`n$($_.Exception.Message)", "Basetune", 'OK', 'Error') | Out-Null
+        }
     })
 
     $btnClose = CFind 'btnCloseConfig'
@@ -1685,13 +1796,46 @@ function Open-OptionsWindow {
     $script:originalMaxThreads = if ($sTxtMaxThreads) { $sTxtMaxThreads.Text } else { '' }
     $script:originalPathReport = if ($sTxtPathReport) { $sTxtPathReport.Text } else { '' }
 
+    # Save Settings is enabled only when something changed AND Max threads is
+    # a whole number in the allowed range (1..32). An invalid value keeps the
+    # button disabled and marks the field red with a tooltip — no popup.
+    $mtRange       = Get-MaxThreadsRange
     $updateSaveState = {
         if (-not $sBtnSave) { return }
         $mtNow   = if ($sTxtMaxThreads) { $sTxtMaxThreads.Text } else { '' }
         $pathNow = if ($sTxtPathReport) { $sTxtPathReport.Text } else { '' }
-        $sBtnSave.IsEnabled =
-            ($mtNow   -ne $script:originalMaxThreads) -or
-            ($pathNow -ne $script:originalPathReport)
+        $mtValid = (-not $sTxtMaxThreads) -or (Test-MaxThreadsValue $mtNow)
+
+        if ($sTxtMaxThreads) {
+            if ($mtValid) {
+                # ClearValue instead of re-assigning the old brush, so style
+                # triggers (focus/hover border) keep working.
+                $sTxtMaxThreads.ClearValue([System.Windows.Controls.Control]::BorderBrushProperty)
+                $sTxtMaxThreads.ToolTip     = $null
+            } else {
+                $sTxtMaxThreads.BorderBrush = [System.Windows.Media.Brushes]::Red
+                $sTxtMaxThreads.ToolTip     = "Enter a whole number from $($mtRange.Min) to $($mtRange.Max)."
+            }
+        }
+
+        # Report path: empty = default Reports folder; otherwise it must be a
+        # valid full path. The folder does not have to exist yet (Save offers
+        # to create it). Same red-border + tooltip pattern as Max threads.
+        $pathValid = $true
+        if ($sTxtPathReport) {
+            $pathErr = if ($pathNow.Trim()) { (Resolve-FolderPath -Path $pathNow -RequireAbsolute).Error } else { $null }
+            $pathValid = -not $pathErr
+            if ($pathValid) {
+                $sTxtPathReport.ClearValue([System.Windows.Controls.Control]::BorderBrushProperty)
+                $sTxtPathReport.ToolTip     = $null
+            } else {
+                $sTxtPathReport.BorderBrush = [System.Windows.Media.Brushes]::Red
+                $sTxtPathReport.ToolTip     = $pathErr
+            }
+        }
+
+        $changed = ($mtNow -ne $script:originalMaxThreads) -or ($pathNow -ne $script:originalPathReport)
+        $sBtnSave.IsEnabled = $changed -and $mtValid -and $pathValid
     }
 
     if ($sTxtMaxThreads) { $sTxtMaxThreads.Add_TextChanged($updateSaveState) }
@@ -1703,28 +1847,45 @@ function Open-OptionsWindow {
 
     if ($sBtnBrowseReport) {
         $sBtnBrowseReport.Add_Click({
-            $p = Show-FolderBrowser
+            $start = if ($sTxtPathReport) { $sTxtPathReport.Text.Trim() } else { '' }
+            $p = Show-FolderBrowser -InitialPath $start -Owner $sWindow
             if ($p -and $sTxtPathReport) { $sTxtPathReport.Text = $p }
         })
     }
 
     if ($sBtnSave) {
         $sBtnSave.Add_Click({
-            # Validate report path
-            $reportPathInput = if ($sTxtPathReport -and $sTxtPathReport.Text.Trim()) { $sTxtPathReport.Text.Trim() } else { $null }
-            if ($reportPathInput -and -not [System.IO.Path]::IsPathRooted($reportPathInput)) {
-                [System.Windows.MessageBox]::Show("Report path must be an absolute path.", "Basetune", 'OK', 'Warning') | Out-Null
-                return
+            # Validate report path (safety net: Save is already disabled while
+            # the path is invalid). Stored normalized: C:\Reports\ -> C:\Reports.
+            $reportPathInput = $null
+            if ($sTxtPathReport -and $sTxtPathReport.Text.Trim()) {
+                $rp = Resolve-FolderPath -Path $sTxtPathReport.Text -RequireAbsolute
+                if ($rp.Error) {
+                    [System.Windows.MessageBox]::Show("Report path is not valid.`n`n$($rp.Error)", "Basetune", 'OK', 'Warning') | Out-Null
+                    return
+                }
+                $reportPathInput = $rp.Path
             }
-            if ($reportPathInput) {
-                try { New-Item -ItemType Directory -Path $reportPathInput -Force | Out-Null } catch {
-                    [System.Windows.MessageBox]::Show("Cannot create report path: $_", "Basetune", 'OK', 'Warning') | Out-Null
+            # A valid folder that does not exist yet is allowed: ask, then create.
+            if ($reportPathInput -and -not (Test-Path -LiteralPath $reportPathInput -PathType Container)) {
+                if (Test-Path -LiteralPath $reportPathInput) {
+                    [System.Windows.MessageBox]::Show("Report path '$reportPathInput' is a file, not a folder.", "Basetune", 'OK', 'Warning') | Out-Null
+                    return
+                }
+                $ans = [System.Windows.MessageBox]::Show("Folder '$reportPathInput' does not exist.`n`nCreate it now?", "Basetune", 'YesNo', 'Question')
+                if ($ans -ne 'Yes') { return }
+                try { New-Item -ItemType Directory -Path $reportPathInput -Force -ErrorAction Stop | Out-Null } catch {
+                    [System.Windows.MessageBox]::Show("Cannot create report folder '$reportPathInput'.`n`n$($_.Exception.Message)", "Basetune", 'OK', 'Warning') | Out-Null
                     return
                 }
             }
 
+            # Safety net only: Save is already disabled while Max threads is invalid.
+            $mtRange = Get-MaxThreadsRange
+            if ($sTxtMaxThreads -and -not (Test-MaxThreadsValue $sTxtMaxThreads.Text)) { return }
+
             # Persist values
-            $global:savedMaxThreads = if ($sTxtMaxThreads -and $sTxtMaxThreads.Text -match '^\d+$') { $sTxtMaxThreads.Text } else { '8' }
+            $global:savedMaxThreads = if ($sTxtMaxThreads) { "$([int]$sTxtMaxThreads.Text.Trim())" } else { "$($mtRange.Default)" }
             $global:savedPathReport = if ($reportPathInput) { $reportPathInput } else { Get-DefaultPathReport }
 
             # Write to Config.json
@@ -1736,6 +1897,8 @@ function Open-OptionsWindow {
                 } else {
                     Get-DefaultPathReport
                 }
+                # Show the normalized path (e.g. trailing '\' removed).
+                if ($sTxtPathReport -and $reportPathInput) { $sTxtPathReport.Text = $reportPathInput }
                 # Update the snapshot so Save Settings becomes disabled again
                 # until the user makes another change. Window stays open.
                 $script:originalMaxThreads = if ($sTxtMaxThreads) { $sTxtMaxThreads.Text } else { '' }

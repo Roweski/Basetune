@@ -15,7 +15,7 @@
 
     NestedModules = @(
         'BasetuneHelpers.psm1',
-        'GraphTokenClient.psm1',
+        'GraphtokenClient.psm1',
         'IntuneGraphPolicies.psm1',
         'IntuneGraphCompare.psm1',
         'IntuneGraphReport.psm1',

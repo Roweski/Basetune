@@ -260,10 +260,14 @@ function Resolve-Category {
             Write-Log "Categories" "API call failed for category '$CategoryId'. $_" "WARN"
         }
     }
+    # __placeholder marks this entry as session-only: the category cache flush
+    # (Invoke-BaselineCompare) skips it, so a temporary API failure is never
+    # written to settingCategories.json as a permanent "[Unresolved Category]".
     $placeholder = [PSCustomObject]@{
         id               = $CategoryId
         displayName      = "[Unresolved Category]"
         parentCategoryId = $null
+        __placeholder    = $true
     }
     if (-not $global:CategoryById.ContainsKey($CategoryId)) {
         $global:CategoryById[$CategoryId] = $placeholder
@@ -489,6 +493,7 @@ function Get-SettingPath {
 function Resolve-DiffForExport {
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Diff,
         $Connection = $null
     )
@@ -567,8 +572,10 @@ function Resolve-DiffForExport {
 function Merge-EnabledWithChildren {
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Resolved
     )
+    if ($Resolved.Count -eq 0) { return @() }
     $enabledLike  = @('enabled', 'true')
     $disabledLike = @('disabled', 'false')
     $toggleLike   = $enabledLike + $disabledLike
@@ -785,8 +792,13 @@ function Merge-EnabledWithChildren {
 function Merge-CollectionSettings {
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Settings
     )
+
+    # Policies without settings produce an empty flat list. That is a valid
+    # state (everything on the other side becomes Missing/Extra), not an error.
+    if ($Settings.Count -eq 0) { return }
 
     # Group by PolicyId + DefinitionId
     $grouped = $Settings | Group-Object -Property PolicyId, DefinitionId
@@ -814,9 +826,64 @@ function Merge-CollectionSettings {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DEFINITION / CATEGORY FILES
+#
+# Single loader for settingDefinitions.json and settingCategories.json, used by
+# the CLI, the UI cache and the UI compare runspace (previously three copies).
+#
+# Import-SettingDefinitions : hashtable keyed by lower-cased, trimmed id
+# Import-SettingCategories  : hashtable keyed by category id
+#
+# Both return $null when the file does not exist and THROW when the file
+# exists but cannot be parsed, so callers can tell "not downloaded yet" apart
+# from "file is corrupt" and log the second one.
+# ─────────────────────────────────────────────────────────────────────────────
+# ConvertTo-* build the lookups from objects already in memory (used by the
+# definition download, which has just fetched them — no need to re-read the
+# 60+ MB file). Import-* read the files and use the same builders.
+function ConvertTo-SettingDefinitionLookup {
+    param([AllowNull()][AllowEmptyCollection()][array]$Definitions)
+    $lookup = @{}
+    foreach ($d in $Definitions) {
+        if ($d -and $d.id) { $lookup[$d.id.Trim().ToLowerInvariant()] = $d }
+    }
+    return $lookup
+}
+
+function ConvertTo-SettingCategoryMap {
+    param([AllowNull()][AllowEmptyCollection()][array]$Categories)
+    $catMap = @{}
+    foreach ($c in $Categories) {
+        # Skip "[Unresolved Category]" placeholders that older versions wrote
+        # to settingCategories.json: leaving them out makes the category get
+        # looked up again instead of staying unresolved forever.
+        if ($c -and $c.id -and $c.displayName -ne '[Unresolved Category]') { $catMap[$c.id] = $c }
+    }
+    return $catMap
+}
+
+function Import-SettingDefinitions {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $defs = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    return (ConvertTo-SettingDefinitionLookup -Definitions @($defs))
+}
+
+function Import-SettingCategories {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $cats = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    return (ConvertTo-SettingCategoryMap -Categories @($cats))
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # EXPORTS
 # ─────────────────────────────────────────────────────────────────────────────
 Export-ModuleMember -Function @(
+    'ConvertTo-SettingDefinitionLookup',
+    'ConvertTo-SettingCategoryMap',
+    'Import-SettingDefinitions',
+    'Import-SettingCategories',
     'Get-RawSettings',
     'ConvertTo-SettingObjects',
     'Merge-CollectionSettings',

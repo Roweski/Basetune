@@ -1,5 +1,5 @@
 # =============================================================================
-# GraphTokenClient.psm1
+# GraphtokenClient.psm1
 # Multi-tenant Microsoft Graph module - Hardened Stateless Version
 # Supports: ClientSecret, Certificate ONLY
 # =============================================================================
@@ -15,6 +15,53 @@ $ErrorActionPreference = 'Stop'
 # freely; the binding is resolved at call time via the manifest's shared
 # module scope.
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Safe property read for tenant nodes.
+# This module runs under Set-StrictMode -Version Latest, where reading a
+# property that does not exist throws. Config.json can be edited by hand, so a
+# tenant node may lack authMethod, clientSecret, displayName, ... Reading those
+# through this helper returns $null instead of aborting the whole config load.
+# Supports PSCustomObject (from JSON) and IDictionary (ordered hashtable).
+# ─────────────────────────────────────────────────────────────────────────────
+function script:Get-NodeValue {
+    param($Node, [string]$Name)
+    if ($null -eq $Node) { return $null }
+    if ($Node -is [System.Collections.IDictionary]) {
+        if ($Node.Contains($Name)) { return $Node[$Name] }
+        return $null
+    }
+    $p = $Node.PSObject.Properties[$Name]
+    if ($p) { return $p.Value }
+    return $null
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Request timeouts
+# Invoke-RestMethod waits forever by default (-TimeoutSec 0). When the network
+# drops in the middle of a request (e.g. Wi-Fi switched off) the connection
+# is not closed, so a Load hung on "Expand Settings: ..." until the network
+# came back. With a timeout the request fails as a transport error, is
+# retried, and finally reported.
+# 30 s for normal requests (policy list/expand, export). The heavy definition
+# download passes a longer timeout (60 s) itself.
+# ─────────────────────────────────────────────────────────────────────────────
+$script:RequestTimeoutSec = 30
+$script:TokenTimeoutSec   = 30
+
+# PowerShell 7.4+ changed the web cmdlets: -TimeoutSec became an alias of
+# -ConnectionTimeoutSeconds and only covers connecting / receiving headers.
+# A response body that stalls halfway (network dropped mid-download — the
+# typical Wi-Fi-off case) is covered by -OperationTimeoutSeconds, per read.
+# Without it the request still hung forever. Use it when available.
+$script:HasOperationTimeout = (Get-Command Invoke-RestMethod).Parameters.ContainsKey('OperationTimeoutSeconds')
+
+function script:Get-TimeoutParams {
+    param([int]$Seconds)
+    $p = @{ TimeoutSec = $Seconds }
+    if ($script:HasOperationTimeout) { $p['OperationTimeoutSeconds'] = $Seconds }
+    return $p
+}
 
 function script:Get-TokenExpiry {
     param([int]$ExpiresIn = 3600)
@@ -37,13 +84,38 @@ function Get-GraphConfig {
         }
     }
 
+    $repaired = $false
     try {
         $rawJson = Get-Content $Path -Raw
-        $cfg = $rawJson | ConvertFrom-Json
+        $cfg = $rawJson | ConvertFrom-Json -ErrorAction Stop
     } catch {
-        return [PSCustomObject]@{
-            tenant        = $null
-            __configError = "Invalid JSON in config file: $_"
+        $parseError = $_
+        # A hand-typed maxthreads such as  "maxthreads": x  (no quotes) makes
+        # the whole file invalid JSON. Replace an invalid maxthreads value with
+        # the default and try once more; if the file is broken somewhere else
+        # this does not help and the original error is reported.
+        $cfg = $null
+        $mtPattern = '("maxthreads"\s*:\s*)([^,\}\r\n]*)'
+        $mtMatch   = [regex]::Match($rawJson, $mtPattern)
+        if ($mtMatch.Success) {
+            $mtRawText = $mtMatch.Groups[2].Value.Trim()
+            if (-not (Test-MaxThreadsValue ($mtRawText.Trim('"')))) {
+                $mtDefault = (Get-MaxThreadsRange).Default
+                $g2        = $mtMatch.Groups[2]
+                $fixedJson = $rawJson.Substring(0, $g2.Index) + "$mtDefault" + $rawJson.Substring($g2.Index + $g2.Length)
+                try {
+                    $cfg = $fixedJson | ConvertFrom-Json -ErrorAction Stop
+                    $rawJson  = $fixedJson
+                    $repaired = $true
+                    Write-Log 'Config' "Invalid maxthreads '$mtRawText' in Config.json (not valid JSON); set to $mtDefault." 'WARN'
+                } catch { $cfg = $null }
+            }
+        }
+        if (-not $cfg) {
+            return [PSCustomObject]@{
+                tenant        = $null
+                __configError = "Invalid JSON in config file: $parseError"
+            }
         }
     }
     $cfg | Add-Member -NotePropertyName '__configError' -NotePropertyValue $null -Force
@@ -55,69 +127,156 @@ function Get-GraphConfig {
     $legacyMarkersOnDisk = ($rawJson -match '"__plaintextForSession"' -or
                             $rawJson -match '"__configError"')
 
-    # ── Decrypt clientSecrets + auto-migrate plaintext ────────────────────────
-    # For every ClientSecret tenant:
-    #   - "DPAPI:<blob>" → decrypt in-place; if decrypt fails (wrong user/PC),
-    #     log a re-enter message and leave the secret empty.
-    #   - plaintext      → encrypt to disk + decrypt in-memory (one-shot
-    #     migration). User keeps working; the disk version is now safe.
-    #
-    # The in-memory $node.clientSecret is ALWAYS plaintext after this point —
-    # downstream code (New-GraphConnection, Get-TokenViaClientSecret) does not
-    # need to know about encryption.
-    #
-    # Plaintext-for-session stash: when we migrate a plaintext secret, the
-    # node temporarily holds the ENCRYPTED form (so ConvertTo-Json writes the
-    # encrypted version to disk). We can't write the plaintext back to the
-    # node BEFORE the save, otherwise we'd encrypt nothing. We also can't
-    # stash plaintext as a property ON the node — ConvertTo-Json would
-    # serialise that property too, defeating the whole point. Use a separate
-    # hashtable keyed by tenant id and merge after the save.
-    $configChanged = $false
-    $plaintextForSession = @{}
+    # ── Repair incomplete tenant entries ──────────────────────────────────────
+    # A hand-edited Config.json can lack authMethod. The UI then showed the
+    # tenant as "(JSON)" while its credentials were filled in. Derive the
+    # method from what the entry contains:
+    #   certThumbprint present              → Certificate
+    #   clientSecret present                → ClientSecret
+    #   only tenantId / clientId present    → ClientSecret (UI default)
+    #   only path present                   → None (offline JSON tenant)
+    # Online tenants also get an empty entry for every missing required field
+    # (tenantId, clientId, clientSecret or certThumbprint), so the field shows
+    # up in Tenant Configuration to be filled in. An authMethod that IS set is
+    # never changed. Repairs are written back to Config.json (save below).
+    # ($repaired may already be $true from the maxthreads JSON repair above.)
     if ($cfg.PSObject.Properties['tenant'] -and $cfg.tenant) {
-        foreach ($prop in $cfg.tenant.PSObject.Properties) {
-            $node = $prop.Value
-            if (-not $node) { continue }
-            if ($node.authMethod -ne 'ClientSecret') { continue }
-            if (-not $node.clientSecret) { continue }
+        foreach ($tProp in @($cfg.tenant.PSObject.Properties)) {
+            $node = $tProp.Value
+            if (-not $node -or $node -is [System.Collections.IDictionary]) { continue }
 
-            $stored = [string]$node.clientSecret
-            $label  = if ($node.displayName) { $node.displayName } else { $prop.Name }
+            $auth    = Get-NodeValue $node 'authMethod'
+            $label   = if (Get-NodeValue $node 'displayName') { Get-NodeValue $node 'displayName' } else { $tProp.Name }
+            $derived = $false
 
-            if (Test-SecretEncrypted $stored) {
-                # Try to decrypt — may fail if copied from another user/machine.
-                $plain = Unprotect-Secret $stored
-                if ($null -eq $plain) {
-                    Write-Log 'Config' "Cannot decrypt clientSecret for '$label'. Open Tenant Configuration and re-enter the secret." 'ERROR'
-                    $node.clientSecret = ''
-                } else {
-                    $node.clientSecret = $plain
+            if (-not $auth) {
+                # A path without any credential keeps meaning "offline JSON
+                # tenant" (that was already valid without authMethod), even
+                # when a tenantId/clientId is left over in the entry.
+                if     (Get-NodeValue $node 'certThumbprint') { $auth = 'Certificate';  $why = 'certThumbprint is set' }
+                elseif (Get-NodeValue $node 'clientSecret')   { $auth = 'ClientSecret'; $why = 'clientSecret is set' }
+                elseif (Get-NodeValue $node 'path')           { $auth = 'None';         $why = 'a JSON path is set and no credentials' }
+                elseif ((Get-NodeValue $node 'tenantId') -or (Get-NodeValue $node 'clientId')) {
+                    $auth = 'ClientSecret'; $why = 'tenantId and/or clientId set, no certThumbprint'
                 }
-            } else {
-                # Legacy plaintext — migrate. Encrypt for disk, stash plaintext
-                # separately so the current session keeps working.
-                try {
-                    $encrypted = Protect-Secret $stored
-                    $node.clientSecret = $encrypted   # what ConvertTo-Json sees
-                    $plaintextForSession[$prop.Name] = $stored
-                    $configChanged = $true
-                    Write-Log 'Config' "Plaintext clientSecret detected for '$label'. Encrypted in place. External backups may still contain plaintext." 'WARN'
-                } catch {
-                    Write-Log 'Config' "Failed to encrypt clientSecret for '$label'. Leaving plaintext (will retry next launch). $($_.Exception.Message)" 'ERROR'
-                }
+                else { continue }   # nothing to derive from; validation flags it below
+                $derived = $true
+            }
+
+            $required = switch ($auth) {
+                'ClientSecret' { @('tenantId', 'clientId', 'clientSecret') }
+                'Certificate'  { @('tenantId', 'clientId', 'certThumbprint') }
+                default        { @() }
+            }
+            $missing = @($required | Where-Object { -not $node.PSObject.Properties[$_] })
+
+            if (-not $derived -and $missing.Count -eq 0) { continue }
+
+            # Rebuild the node in a readable field order; keep every other
+            # property that was already there.
+            $order = @('displayName', 'authMethod') + $required + @('path')
+            $new   = [ordered]@{}
+            foreach ($f in $order) {
+                if ($f -eq 'authMethod')        { $new['authMethod'] = $auth; continue }
+                if ($node.PSObject.Properties[$f]) { $new[$f] = $node.$f; continue }
+                if ($f -in $required)           { $new[$f] = '' }
+            }
+            foreach ($p in $node.PSObject.Properties) {
+                if (-not $new.Contains($p.Name)) { $new[$p.Name] = $p.Value }
+            }
+            $tProp.Value = [PSCustomObject]$new
+            $repaired    = $true
+
+            if ($derived) {
+                Write-Log 'Config' "authMethod was missing for '$label'; set to $auth ($why)." 'WARN'
+            }
+            if ($missing.Count -gt 0) {
+                Write-Log 'Config' "Added empty $($missing -join ', ') for '$label'. Fill in the value(s) in Tenant Configuration." 'WARN'
             }
         }
     }
 
-    # If we migrated any plaintext secrets, write the encrypted version to disk
-    # before continuing. Best-effort: a failed write is logged but doesn't
-    # block the session — the secret stays plaintext on disk for next launch.
+    # ── Secrets stay encrypted in memory ──────────────────────────────────────
+    # clientSecret values are NOT decrypted here. They stay as "DPAPI:<blob>"
+    # in the config objects for the whole session and are decrypted only at
+    # the moment they are needed:
+    #   - New-GraphConnection (token request: definition download, loading
+    #     source/target policies, the connection test in Tenant Configuration)
+    #   - Tenant Configuration, when a tenant is selected in the list
+    # Nothing in memory holds a plaintext secret that a save could write to
+    # disk by mistake.
+    #
+    # Legacy plaintext secrets found on disk are encrypted and written back
+    # (one-shot migration); the in-memory value becomes the encrypted form too.
+    # ── Repair settings.maxthreads ────────────────────────────────────────────
+    # An invalid value (0, negative, above the maximum, not a number) was
+    # already replaced by the default at use time, but stayed wrong in the
+    # file. Write the value that is actually used back to Config.json.
+    if ($cfg.PSObject.Properties['settings'] -and $cfg.settings -and
+        $cfg.settings.PSObject.Properties['maxthreads']) {
+        $mtRaw = $cfg.settings.maxthreads
+        if (-not (Test-MaxThreadsValue $mtRaw)) {
+            $mtFixed = Get-ValidMaxThreads $mtRaw
+            $cfg.settings.maxthreads = $mtFixed
+            $repaired = $true
+            $mtRange = Get-MaxThreadsRange
+            Write-Log 'Config' "Invalid maxthreads '$mtRaw' in Config.json (allowed $($mtRange.Min)-$($mtRange.Max)); set to $mtFixed." 'WARN'
+        }
+    }
+
+    # ── Repair settings.path.report ───────────────────────────────────────────
+    # An invalid report path (C:dddd, \Reports, bad characters, a drive that
+    # does not exist) is replaced by the default <Basetune>\Reports folder, the
+    # folder that is used anyway. A valid full path is written back normalized
+    # (C:\Reports\ -> C:\Reports). Relative paths are left as they are.
+    if ($cfg.PSObject.Properties['settings'] -and $cfg.settings -and
+        $cfg.settings.PSObject.Properties['path'] -and $cfg.settings.path -and
+        $cfg.settings.path.PSObject.Properties['report'] -and
+        $cfg.settings.path.report -and "$($cfg.settings.path.report)".Trim()) {
+        $rpRaw   = "$($cfg.settings.path.report)"
+        $btRoot  = Split-Path (Split-Path ([System.IO.Path]::GetFullPath($Path)) -Parent) -Parent
+        $rpCheck = Resolve-FolderPath -Path $rpRaw -BasePath $btRoot
+        if ($rpCheck.Error) {
+            $rpDefault = (Resolve-FolderPath -Path 'Reports' -BasePath $btRoot).Path
+            if (-not $rpDefault) { $rpDefault = "$btRoot\Reports" }
+            $cfg.settings.path.report = $rpDefault
+            $repaired = $true
+            Write-Log 'Config' "Invalid report path '$($rpRaw.Trim())' in Config.json. Set to default: $rpDefault" 'WARN'
+        } elseif ($rpRaw.Trim() -match '^([A-Za-z]:|\\\\|"|/)' -and $rpCheck.Path -cne $rpRaw) {
+            $cfg.settings.path.report = $rpCheck.Path
+            $repaired = $true
+            Write-Log 'Config' "Report path in Config.json normalized: '$rpRaw' -> '$($rpCheck.Path)'." 'INFO'
+        }
+    }
+
+    $configChanged = $repaired   # repaired entries are saved together with any secret migration
+    if ($cfg.PSObject.Properties['tenant'] -and $cfg.tenant) {
+        foreach ($prop in $cfg.tenant.PSObject.Properties) {
+            $node = $prop.Value
+            if (-not $node) { continue }
+            if ((Get-NodeValue $node 'authMethod') -ne 'ClientSecret') { continue }
+            $stored = [string](Get-NodeValue $node 'clientSecret')
+            if (-not $stored -or (Test-SecretEncrypted $stored)) { continue }
+
+            $dn    = Get-NodeValue $node 'displayName'
+            $label = if ($dn) { $dn } else { $prop.Name }
+            try {
+                $node.clientSecret = Protect-Secret $stored
+                $configChanged = $true
+                Write-Log 'Config' "Plaintext clientSecret detected for '$label'. Encrypted in place. External backups may still contain plaintext." 'WARN'
+            } catch {
+                Write-Log 'Config' "Failed to encrypt clientSecret for '$label'. Leaving plaintext (will retry next launch). $($_.Exception.Message)" 'ERROR'
+            }
+        }
+    }
+
+    # Write repairs / migrated secrets to disk. Best-effort: a failed write is
+    # logged but doesn't block the session.
     #
     # Build a sanitized payload that omits all internal __* markers
     # (__configError, __invalid, and legacy __plaintextForSession from an
     # earlier buggy migration). Without this, ConvertTo-Json would serialize
-    # those properties to disk — defeating the whole point of the migration.
+    # those properties to disk.
     if ($configChanged -or $legacyMarkersOnDisk) {
         if ($legacyMarkersOnDisk -and -not $configChanged) {
             Write-Log 'Config' "Cleaning legacy internal markers from Config.json (no functional impact)." 'INFO'
@@ -149,13 +308,7 @@ function Get-GraphConfig {
             }
             $cleanCfg | ConvertTo-Json -Depth 8 | Out-File $Path -Encoding UTF8
         } catch {
-            Write-Log 'Config' "Could not write encrypted Config.json: $($_.Exception.Message)" 'ERROR'
-        }
-        # Restore the in-memory plaintext so the rest of the session works
-        # against decrypted secrets. Done AFTER the save so disk sees encrypted.
-        foreach ($key in $plaintextForSession.Keys) {
-            $node = $cfg.tenant.PSObject.Properties[$key].Value
-            if ($node) { $node.clientSecret = $plaintextForSession[$key] }
+            Write-Log 'Config' "Could not write Config.json: $($_.Exception.Message)" 'ERROR'
         }
     }
 
@@ -168,20 +321,21 @@ function Get-GraphConfig {
             $node = if ($prop) { $prop.Value } else { $null }
             if (-not $node) { continue }
             $invalid = $false
+            $nAuth   = Get-NodeValue $node 'authMethod'
             # Offline-only tenants (authMethod 'None' or absent + path) are valid
-            if ($node.authMethod -eq 'None' -or (-not $node.authMethod -and $node.path)) {
+            if ($nAuth -eq 'None' -or (-not $nAuth -and (Get-NodeValue $node 'path'))) {
                 # valid offline entry
-            } elseif (-not $node.tenantId -or -not $node.clientId) {
+            } elseif (-not (Get-NodeValue $node 'tenantId') -or -not (Get-NodeValue $node 'clientId')) {
                 $invalid = $true
-            } elseif ($node.authMethod -eq 'ClientSecret' -and -not $node.clientSecret) {
-                # NOTE: an empty clientSecret here means decrypt failed (wrong
-                # user/machine). UI flow keeps the tenant visible so the user
-                # can re-enter the secret; CLI flow flags it __invalid (below)
-                # because there's no interactive recovery path.
+            } elseif ($nAuth -eq 'ClientSecret' -and -not (Get-NodeValue $node 'clientSecret')) {
+                # No secret at all. (A secret that exists but cannot be
+                # decrypted on this machine is only detected when it is used:
+                # New-GraphConnection reports it.) The UI keeps the tenant
+                # visible so the secret can be entered.
                 $invalid = $true
-            } elseif ($node.authMethod -eq 'Certificate' -and -not $node.certThumbprint) {
+            } elseif ($nAuth -eq 'Certificate' -and -not (Get-NodeValue $node 'certThumbprint')) {
                 $invalid = $true
-            } elseif ($node.authMethod -ne 'ClientSecret' -and $node.authMethod -ne 'Certificate' -and $node.authMethod -ne 'None') {
+            } elseif ($nAuth -ne 'ClientSecret' -and $nAuth -ne 'Certificate' -and $nAuth -ne 'None') {
                 $invalid = $true
             }
             if ($invalid) {
@@ -264,7 +418,8 @@ function script:Get-TokenViaClientSecret {
         scope         = 'https://graph.microsoft.com/.default'
     }
 
-    Invoke-RestMethod `
+    $timeouts = Get-TimeoutParams $script:TokenTimeoutSec
+    Invoke-RestMethod @timeouts `
         -Method Post `
         -Uri "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" `
         -ContentType 'application/x-www-form-urlencoded' `
@@ -322,7 +477,8 @@ function script:Get-TokenViaCertificate {
         scope                 = 'https://graph.microsoft.com/.default'
     }
 
-    Invoke-RestMethod `
+    $timeouts = Get-TimeoutParams $script:TokenTimeoutSec
+    Invoke-RestMethod @timeouts `
         -Method Post `
         -Uri "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" `
         -ContentType 'application/x-www-form-urlencoded' `
@@ -339,16 +495,50 @@ function New-GraphConnection {
         [Parameter(Mandatory)][string]$Label
     )
 
-    $authMethodLabel = if ($Config.authMethod -eq 'ClientSecret') { 'Client Secret' } else { $Config.authMethod }
+    $authMethod = Get-NodeValue $Config 'authMethod'
+    $tenantId   = Get-NodeValue $Config 'tenantId'
+    $clientId   = Get-NodeValue $Config 'clientId'
+
+    # Offline (JSON) tenants and unknown auth methods have no token endpoint.
+    # Say so explicitly instead of the generic "returned no response" below.
+    if ($authMethod -notin @('ClientSecret', 'Certificate')) {
+        $shown = if ($authMethod) { $authMethod } else { 'None' }
+        Write-Log $Label "Cannot connect: authMethod '$shown' is not an online method (ClientSecret or Certificate)." "WARN"
+        return $null
+    }
+    if (-not $tenantId -or -not $clientId) {
+        Write-Log $Label "Cannot connect: tenantId or clientId is missing in the configuration." "WARN"
+        return $null
+    }
+
+    # Just-in-time decryption: the secret is stored encrypted (DPAPI) in the
+    # config objects and decrypted only here, for this one token request. The
+    # plaintext lives in local variables only and is never written back to
+    # the node. A plaintext value (legacy) is accepted as-is.
+    $secret = $null
+    if ($authMethod -eq 'ClientSecret') {
+        $storedSecret = [string](Get-NodeValue $Config 'clientSecret')
+        if (-not $storedSecret) {
+            Write-Log $Label "Cannot connect: clientSecret is empty. Enter it in Tenant Configuration." "WARN"
+            return $null
+        }
+        $secret = Unprotect-Secret $storedSecret
+        if (-not $secret) {
+            Write-Log $Label "Cannot decrypt the clientSecret (encrypted by another Windows user or on another PC). Re-enter the secret in Tenant Configuration." "ERROR"
+            return $null
+        }
+    }
+
+    $authMethodLabel = if ($authMethod -eq 'ClientSecret') { 'Client Secret' } else { $authMethod }
     Write-Log $Label "Requesting access token ($authMethodLabel)..."
 
     try {
-        $token = switch ($Config.authMethod) {
+        $token = switch ($authMethod) {
             'ClientSecret' {
-                Get-TokenViaClientSecret $Config.tenantId $Config.clientId $Config.clientSecret
+                Get-TokenViaClientSecret $tenantId $clientId $secret
             }
             'Certificate' {
-                Get-TokenViaCertificate $Config.tenantId $Config.clientId $Config.certThumbprint
+                Get-TokenViaCertificate $tenantId $clientId (Get-NodeValue $Config 'certThumbprint')
             }
         }
     }
@@ -378,8 +568,8 @@ function New-GraphConnection {
 
     [PSCustomObject]@{
         Label       = $Label
-        TenantId    = $Config.tenantId
-        ClientId    = $Config.clientId
+        TenantId    = $tenantId
+        ClientId    = $clientId
         AccessToken = $token.access_token
         ExpiresAt   = $expiresAt
         _Config     = $Config
@@ -394,9 +584,20 @@ function New-GraphConnection {
 function script:Update-Connection {
     param($Connection)
 
+    if ($null -eq $Connection) {
+        throw "No Graph connection available."
+    }
+
     if ($null -eq $Connection.ExpiresAt -or (Get-Date) -ge $Connection.ExpiresAt) {
         Write-Log $Connection.Label "Token expired. Refreshing..." "WARN"
-        return New-GraphConnection -Config $Connection._Config -Label $Connection.Label
+        $fresh = New-GraphConnection -Config $Connection._Config -Label $Connection.Label
+        # New-GraphConnection returns $null on failure. Returning that would
+        # surface later as "The property 'AccessToken' cannot be found" (strict
+        # mode), which tells the user nothing. Fail here with the real reason.
+        if (-not $fresh) {
+            throw "Token refresh failed for '$($Connection.Label)'. Check the tenant credentials."
+        }
+        return $fresh
     }
 
     return $Connection
@@ -414,11 +615,19 @@ function Invoke-IntuneGraphRequest {
         [object]$Body = $null,
         [string]$ApiVersion = "v1.0",
         [int]$MaxRetries = 3,
-        [int]$MaxThrottleRetries = 5
+        [int]$MaxThrottleRetries = 5,
+        [int]$TimeoutSec = $script:RequestTimeoutSec,
+        # Network/transport errors (no DNS, no route, timeout): wait a fixed
+        # $NetworkRetryDelaySec between attempts, $NetworkRetries times.
+        # Parallel workers pass 0 so the parent handles an outage once,
+        # instead of every worker retrying and logging on its own.
+        [int]$NetworkRetries = 3,
+        [int]$NetworkRetryDelaySec = 10
     )
 
     [int]$retry = 0
     [int]$throttleCount = 0
+    [int]$netRetry = 0
 
     $conn = Update-Connection $Connection
 
@@ -437,6 +646,7 @@ function Invoke-IntuneGraphRequest {
         Uri     = $Uri
         Headers = $headers
     }
+    $params += (Get-TimeoutParams $TimeoutSec)
 
     if ($Body) {
         $params.Body = ($Body | ConvertTo-Json -Depth 20 -Compress)
@@ -514,11 +724,26 @@ function Invoke-IntuneGraphRequest {
             # HTTP 500 / 502 / 504 — generic server faults
             # that are worth retrying with back-off
             # ─────────────────────────────────────────────
-            if ($status -in @(0, 500, 502, 504) -and $retry -lt ($MaxRetries - 1)) {
+            # Network / transport error (status 0): fixed delay, own counter.
+            if ($status -eq 0) {
+                if ($netRetry -lt $NetworkRetries) {
+                    $netRetry++
+                    # One uniform message: the underlying reason ("No such host is
+                    # known", timeout, reset) differs per situation and adds nothing.
+                    Write-Log $conn.Label "Network unavailable. Retrying in $NetworkRetryDelaySec sec... [$netRetry/$NetworkRetries]" "WARN"
+                    Start-Sleep -Seconds $NetworkRetryDelaySec
+                    continue
+                }
+                # Still an HttpRequestException (so callers and
+                # Test-GraphNetworkError recognise it as a network error), with
+                # a readable message; the original error is kept as inner.
+                throw [System.Net.Http.HttpRequestException]::new("Network connection lost.", $_exc)
+            }
+
+            if ($status -in @(500, 502, 504) -and $retry -lt ($MaxRetries - 1)) {
                 $wait = [math]::Pow(2, $retry + 1)   # 2s, 4s …
                 $retry++
-                $_what = if ($status -eq 0) { "Network/transport error" } else { "Server error (HTTP $status)" }
-                Write-Log $conn.Label "$_what. Retrying in $wait sec... [$retry/$($MaxRetries - 1)]" "WARN"
+                Write-Log $conn.Label "Server error (HTTP $status). Retrying in $wait sec... [$retry/$($MaxRetries - 1)]" "WARN"
                 Start-Sleep -Seconds $wait
                 continue
             }
@@ -527,7 +752,11 @@ function Invoke-IntuneGraphRequest {
             # Unauthorized → refresh token once
             # ─────────────────────────────────────────────
             if ($status -eq 401 -and $retry -eq 0) {
-                $conn = New-GraphConnection -Config $conn._Config -Label $conn.Label
+                $fresh = New-GraphConnection -Config $conn._Config -Label $conn.Label
+                if (-not $fresh) {
+                    throw "HTTP 401 and token refresh failed for '$($conn.Label)'. Check the tenant credentials."
+                }
+                $conn = $fresh
                 $params.Headers.Authorization = "Bearer $($conn.AccessToken)"
                 $retry++
                 continue
@@ -536,12 +765,50 @@ function Invoke-IntuneGraphRequest {
             throw
         }
     }
+
+    # Only reachable when the retry budget ran out on a path that does not
+    # throw by itself (e.g. -MaxRetries 1 combined with a 401 refresh). Never
+    # fall through silently: the caller would treat $null as "no data".
+    throw "Graph request failed after $MaxRetries attempts: $Uri"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Paging
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Network helpers
+#
+# Test-GraphNetworkError : $true when an exception is a transport problem
+#                          (no DNS, no route, connection dropped, timeout) and
+#                          not an HTTP error answered by Graph.
+# Test-GraphReachable    : quick connectivity probe — resolves the Graph host
+#                          name (max 5 s). Used to wait for the network to come
+#                          back before retrying a batch.
+# ─────────────────────────────────────────────────────────────────────────────
+function Test-GraphNetworkError {
+    param($Exception)
+    $e = $Exception
+    while ($e) {
+        if ($e.PSObject.Properties['Response'] -and $e.Response) { return $false }  # Graph answered
+        if ($e -is [System.Net.Http.HttpRequestException] -or
+            $e -is [System.Net.Sockets.SocketException] -or
+            $e -is [System.TimeoutException] -or
+            $e -is [System.Threading.Tasks.TaskCanceledException] -or
+            $e -is [System.IO.IOException]) { return $true }
+        $e = $e.InnerException
+    }
+    return $false
+}
+
+function Test-GraphReachable {
+    param([string]$HostName = 'graph.microsoft.com', [int]$TimeoutMs = 5000)
+    try {
+        $t = [System.Net.Dns]::GetHostAddressesAsync($HostName)
+        return ($t.Wait($TimeoutMs) -and $t.Result.Count -gt 0)
+    } catch { return $false }
+}
 
 function Get-GraphPagedResults {
     param(
@@ -551,7 +818,8 @@ function Get-GraphPagedResults {
         # Heavy endpoints (configurationSettings) need more retries than the
         # default. This was never passed through, so every paged call was
         # capped at the default regardless of how expensive the endpoint is.
-        [int]$MaxRetries = 3
+        [int]$MaxRetries = 3,
+        [int]$TimeoutSec = $script:RequestTimeoutSec
     )
 
     $results = [System.Collections.Generic.List[object]]::new()
@@ -560,7 +828,7 @@ function Get-GraphPagedResults {
 
     while ($next) {
         $conn = Update-Connection $conn 
-        $response = Invoke-IntuneGraphRequest -Connection $conn -Uri $next -ApiVersion $ApiVersion -MaxRetries $MaxRetries
+        $response = Invoke-IntuneGraphRequest -Connection $conn -Uri $next -ApiVersion $ApiVersion -MaxRetries $MaxRetries -TimeoutSec $TimeoutSec
 
         if ($response.value) {
             foreach ($i in $response.value) {
@@ -589,5 +857,7 @@ Export-ModuleMember -Function @(
     'Get-TenantList',
     'New-GraphConnection',
     'Invoke-IntuneGraphRequest',
-    'Get-GraphPagedResults'
+    'Get-GraphPagedResults',
+    'Test-GraphNetworkError',
+    'Test-GraphReachable'
 )

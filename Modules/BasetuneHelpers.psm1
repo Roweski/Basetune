@@ -30,11 +30,12 @@ function Write-Log {
     param([string]$Label, [string]$Message, [string]$Level = "INFO")
 
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $formatted = "[$Level][$Label] $Message"
+    # Write-Log '' '' → an empty separator line in the log view.
+    $formatted = if (-not $Label -and -not $Message) { '' } else { "[$Level][$Label] $Message" }
     $fileEntry = "$timestamp $formatted"
 
     # Write to log file if one is set (best-effort, never throw)
-    if ($script:LogFile) {
+    if ($script:LogFile -and $formatted) {
         try { Add-Content -Path $script:LogFile -Value $fileEntry -Encoding UTF8 } catch {}
     }
 
@@ -180,12 +181,155 @@ function Unprotect-Secret {
     }
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MaxThreads validation
+# Used for the parallel settings expand (ForEach-Object -Parallel
+# -ThrottleLimit). ThrottleLimit must be >= 1; 0 or garbage used to reach the
+# cmdlet and abort the whole load. Anything outside 1..32 (or not a number)
+# falls back to the default of 8.
+# ─────────────────────────────────────────────────────────────────────────────
+$script:MaxThreadsDefault = 8
+$script:MaxThreadsMin     = 1
+$script:MaxThreadsMax     = 32
+
+function Get-ValidMaxThreads {
+    param($Value)
+    $n = 0
+    if ($null -eq $Value -or -not [int]::TryParse("$Value".Trim(), [ref]$n)) {
+        return $script:MaxThreadsDefault
+    }
+    if ($n -lt $script:MaxThreadsMin) { return $script:MaxThreadsDefault }
+    if ($n -gt $script:MaxThreadsMax) { return $script:MaxThreadsDefault }
+    return $n
+}
+
+function Test-MaxThreadsValue {
+    # $true when the value is a whole number inside the allowed range.
+    # The Options dialog uses this to refuse a bad value instead of silently
+    # replacing it.
+    param($Value)
+    $n = 0
+    if ($null -eq $Value -or -not [int]::TryParse("$Value".Trim(), [ref]$n)) { return $false }
+    return ($n -ge $script:MaxThreadsMin -and $n -le $script:MaxThreadsMax)
+}
+
+function Get-MaxThreadsRange {
+    return [PSCustomObject]@{ Min = $script:MaxThreadsMin; Max = $script:MaxThreadsMax; Default = $script:MaxThreadsDefault }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Folder path validation — used for the report path (Config.json, -ReportPath,
+# Options window) and -ExportPath.
+#
+# Returns [PSCustomObject]@{ Path; Error }:
+#   Path  — normalized full path (single backslashes, no trailing backslash
+#           except on a drive root such as C:\), or $null when invalid
+#   Error — reason the path is invalid, or $null
+#
+# Accepted:  C:\Reports, C:\Reports\, \\server\share\Reports,
+#            relative paths (Reports, .\Reports) when -BasePath is given
+# Rejected:  c:dddd / C: (drive-relative), \Reports (no drive), invalid
+#            characters, reserved names (CON, NUL, ...), a drive that does
+#            not exist on this PC
+# The folder itself does NOT have to exist.
+# ─────────────────────────────────────────────────────────────────────────────
+function Resolve-FolderPath {
+    param(
+        [string]$Path,
+        [string]$BasePath = '',
+        [switch]$RequireAbsolute
+    )
+
+    $fail = { param($m) [PSCustomObject]@{ Path = $null; Error = $m } }
+
+    $p = if ($null -eq $Path) { '' } else { $Path.Trim() }
+    # Pasted "C:\My Reports" (with quotes) from Explorer's "Copy as path".
+    if ($p.Length -ge 2 -and $p.StartsWith('"') -and $p.EndsWith('"')) { $p = $p.Substring(1, $p.Length - 2).Trim() }
+    if (-not $p) { return & $fail "Path is empty." }
+    $orig = $p
+    $p = $p -replace '/', '\'
+
+    $example = "Use a full path such as C:\Reports or \\server\share\Reports."
+    $prefix  = ''
+    $rest    = ''
+
+    if ($p -match '^\\\\') {
+        # UNC: \\server\share[\...]
+        if ($p -notmatch '^\\\\([^\\]+)\\+([^\\]+)(.*)$') {
+            return & $fail "'$orig' is not a complete network path. $example"
+        }
+        $srv = $Matches[1]; $share = $Matches[2]; $rest = $Matches[3]
+        if ("$srv$share" -match '[<>"|?*:]') {
+            return & $fail "'$orig' contains invalid characters (< > : `" | ? *)."
+        }
+        $prefix = "\\$srv\$share"
+    }
+    elseif ($p -match '^([A-Za-z]):\\(.*)$') {
+        $prefix = "$($Matches[1].ToUpper()):"
+        $rest   = "\$($Matches[2])"
+    }
+    elseif ($p -match '^[A-Za-z]:') {
+        # C:Reports resolves against the current folder of drive C — never
+        # what the user means.
+        return & $fail "'$orig' is not a valid folder path (missing '\' after the drive letter). $example"
+    }
+    elseif ($p -match '^\\') {
+        return & $fail "'$orig' has no drive letter. $example"
+    }
+    else {
+        if ($RequireAbsolute -or -not $BasePath) {
+            return & $fail "'$orig' is not a full path. $example"
+        }
+        $base = Resolve-FolderPath -Path $BasePath
+        if ($base.Error) { return & $fail "Base folder for '$orig' is not valid: $($base.Error)" }
+        return Resolve-FolderPath -Path ($base.Path.TrimEnd('\') + '\' + $p)
+    }
+
+    # Check every folder name after the drive/share.
+    $segments = [System.Collections.Generic.List[string]]::new()
+    foreach ($seg in ($rest -split '\\+')) {
+        if ($seg -eq '' -or $seg -eq '.') { continue }
+        if ($seg -eq '..') {
+            if ($segments.Count -gt 0) { $segments.RemoveAt($segments.Count - 1) }
+            continue
+        }
+        if ($seg -match '[<>:"|?*]' -or $seg -match '[\x00-\x1F]') {
+            return & $fail "'$orig' contains invalid characters (< > : `" | ? *)."
+        }
+        if ($seg -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$') {
+            return & $fail "'$orig' contains a reserved Windows name ('$seg')."
+        }
+        if ($seg -ne $seg.TrimEnd(' ', '.')) {
+            return & $fail "'$orig': folder names cannot end with a space or a dot ('$seg')."
+        }
+        $segments.Add($seg)
+    }
+
+    $full = if ($segments.Count -gt 0) { $prefix + '\' + ($segments -join '\') }
+            elseif ($prefix -match '^[A-Z]:$') { "$prefix\" }   # drive root C:\
+            else { $prefix }                                    # \\server\share
+
+    # Drive must exist on this PC (Windows only; network shares are not
+    # probed here — they can be slow and give their own error on create).
+    if ($prefix -match '^[A-Z]:$' -and ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+        if (-not (Test-Path -LiteralPath "$prefix\")) {
+            return & $fail "Drive $prefix does not exist on this PC ('$orig')."
+        }
+    }
+
+    return [PSCustomObject]@{ Path = $full; Error = $null }
+}
+
 Export-ModuleMember -Function @(
+    'Resolve-FolderPath',
     'Write-Log',
     'Set-LogCallback',
     'Set-LogFile',
     'Get-TenantMode',
     'Protect-Secret',
     'Unprotect-Secret',
-    'Test-SecretEncrypted'
+    'Test-SecretEncrypted',
+    'Get-ValidMaxThreads',
+    'Test-MaxThreadsValue',
+    'Get-MaxThreadsRange'
 )

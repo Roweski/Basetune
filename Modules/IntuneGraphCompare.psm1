@@ -119,8 +119,11 @@ function Compare-RawSettings {
 function Add-IssueColumn {
     param(
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [array]$Diff
     )
+
+    if ($Diff.Count -eq 0) { return }
 
     # Group by DefinitionId — only rows with a target match are considered.
     # Missing rows (TargetPolicyId = $null) and Extra rows (SourcePolicyId = $null)
@@ -176,47 +179,88 @@ foreach ($g in $grouped) {
 # ─────────────────────────────────────────────────────────────────────────────
 # INVOKE BASELINE COMPARE
 #
-# Single entry point for the full compare pipeline — used by both
-# CLI and GUI runspace.
-# Keeping the logic here means bugfixes only need to happen in one place.
+# Single entry point for the full compare pipeline — used by BOTH the CLI and
+# the UI compare runspace. Bugfixes happen in one place only.
 #
 # Steps:
+#   0. Wire the compare context (definition lookup, categories, connection)
+#      into the globals the resolve functions read
 #   1. Flatten source + target policies (ConvertTo-SettingObjects)
 #   2. Merge collection settings (Merge-CollectionSettings)
 #   3. Compare (Compare-RawSettings + Add-IssueColumn)
 #   4. Resolve setting names + values (Resolve-DiffForExport + Merge-EnabledWithChildren)
-#      — skipped when $bHasDefinitions is $false
+#      — skipped when no definition lookup is available
 #   5. Export diff.csv, overlap.csv, summary.csv, report.html to $ExportPath
-#   6. Flush category cache if dirty
+#   6. Flush the category cache if new categories were fetched from the API
 #
 # Input:
-#   SourcePolicies   — array of policy objects (PolicyId, Name, Settings)
-#   TargetPolicies   — array of policy objects
-#   ExportPath       — output folder (must exist)
-#   bHasDefinitions  — whether setting definitions are available for name resolution
+#   SourcePolicies     — policy objects (PolicyId, Name, Settings). May be empty.
+#   TargetPolicies     — policy objects. May be empty.
+#   ExportPath         — output folder (must exist)
+#   ReportFile         — HTML file path; default "$ExportPath\report.html"
+#   DefinitionLookup   — hashtable from Import-SettingDefinitions, or $null
+#   CategoryById       — hashtable from Import-SettingCategories, or $null
+#   CategoriesFilePath — where the category cache is flushed to (optional)
+#   Connection         — Graph connection for on-demand category lookups (optional)
+#   SourceLabel / TargetLabel — shown in the HTML header
 #
-# Output: none (side-effects: files written to ExportPath)
+# Output: [PSCustomObject]@{ Success; RowCount; ReportFile }
+#   Success = $false when there is nothing to compare (no source policies).
+#   Exceptions from the pipeline itself are NOT swallowed — the caller logs them.
 # ─────────────────────────────────────────────────────────────────────────────
 function Invoke-BaselineCompare {
     param(
         [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
         [array]$SourcePolicies,
 
         [Parameter(Mandatory)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
         [array]$TargetPolicies,
 
         [Parameter(Mandatory)]
         [string]$ExportPath,
 
-        # If provided, HTML is written to this specific file path (for timestamped reports).
-        # If omitted, falls back to "$ExportPath\report.html" for backwards compatibility.
         [string]$ReportFile = "",
 
-        [bool]$bHasDefinitions = $false,
+        [hashtable]$DefinitionLookup = $null,
+        [hashtable]$CategoryById     = $null,
+        [string]$CategoriesFilePath  = "",
+        $Connection                  = $null,
 
         [string]$SourceLabel = "",
         [string]$TargetLabel = ""
     )
+
+    $SourcePolicies = @($SourcePolicies | Where-Object { $_ })
+    $TargetPolicies = @($TargetPolicies | Where-Object { $_ })
+
+    if ($SourcePolicies.Count -eq 0) {
+        Write-Log "Compare" "No source policies to compare. Check the source filter or selection." "ERROR"
+        return [PSCustomObject]@{ Success = $false; RowCount = 0; ReportFile = $null }
+    }
+    if ($TargetPolicies.Count -eq 0) {
+        Write-Log "Compare" "No target policies loaded. Every baseline setting will be reported as Missing." "WARN"
+    }
+
+    # ── 0. Compare context ──────────────────────────────────────────────────
+    # The resolve functions (Get-SettingPath, Resolve-Category, ...) read these
+    # globals. Set them here so every caller gets identical behaviour.
+    $bHasDefinitions = ($null -ne $DefinitionLookup -and $DefinitionLookup.Count -gt 0)
+    $bHasCategories  = ($null -ne $CategoryById -and $CategoryById.Count -gt 0)
+
+    $global:SettingDefinitionLookup = if ($bHasDefinitions) { $DefinitionLookup } else { @{} }
+    # Clone: the UI passes its session cache in by reference. Placeholders
+    # for categories that failed to resolve must not end up in that cache,
+    # otherwise they stay unresolved for the rest of the session.
+    $global:CategoryById            = if ($bHasCategories)  { $CategoryById.Clone() } else { @{} }
+    $global:bHasCategories          = $bHasCategories
+    $global:CategoriesFilePath      = $CategoriesFilePath
+    $global:CategoryPathCache       = @{}
+    $global:CategoryCacheDirty      = $false
+    $global:GraphConnection         = $Connection
 
     # ── 1+2. Flatten + merge collections ─────────────────────────────────────
     Write-Log "Compare" "Flattening $($SourcePolicies.Count) source policies..." "INFO"
@@ -231,6 +275,10 @@ function Invoke-BaselineCompare {
     })
     $targetFlat = @(Merge-CollectionSettings -Settings $targetFlat)
 
+    if ($sourceFlat.Count -eq 0) {
+        Write-Log "Compare" "The selected source policies contain no settings." "WARN"
+    }
+
     # ── 3. Compare ────────────────────────────────────────────────────────────
     Write-Log "Compare" "Comparing..." "INFO"
     $diff = @(Compare-RawSettings -Source $sourceFlat -Target $targetFlat)
@@ -238,11 +286,11 @@ function Invoke-BaselineCompare {
 
     # ── 4. Resolve ────────────────────────────────────────────────────────────
     if ($bHasDefinitions) {
-        $resolved = Resolve-DiffForExport -Diff $diff
-        $resolved = Merge-EnabledWithChildren -Resolved $resolved
+        $resolved = @(Resolve-DiffForExport -Diff $diff)
+        $resolved = @(Merge-EnabledWithChildren -Resolved $resolved)
     } else {
-        Write-Log "Resolve" "Skipped — using raw setting IDs and values" "WARN"
-        $resolved = $diff | ForEach-Object {
+        Write-Log "Resolve" "No setting definitions — using raw setting IDs and values" "WARN"
+        $resolved = @($diff | ForEach-Object {
             [PSCustomObject]@{
                 DefinitionId     = $_.DefinitionId
                 Setting          = $_.DefinitionId
@@ -253,8 +301,9 @@ function Invoke-BaselineCompare {
                 SourceValue      = $_.SourceValue
                 TargetValue      = $_.TargetValue
             }
-        }
+        })
     }
+    Write-Log "Compare" "Compared: $($resolved.Count) result rows." "OK"
 
     # ── 5. Export ─────────────────────────────────────────────────────────────
     # DefinitionId is exported so diff.csv is self-contained for
@@ -262,33 +311,62 @@ function Invoke-BaselineCompare {
     # friendly path and the raw id would otherwise be lost — keywords
     # such as TamperProtection or LocalAdminPassword only occur in the
     # id, so anything matching on diff.csv would silently miss them.
+    #
+    # utf8BOM: Excel only recognises UTF-8 in a semicolon CSV when the file
+    # starts with a BOM. Without it, accented characters in policy names and
+    # values are shown garbled.
+    $diffCsv    = Join-Path $ExportPath 'diff.csv'
+    $overlapCsv = Join-Path $ExportPath 'overlap.csv'
+    $summaryCsv = Join-Path $ExportPath 'summary.csv'
+
     $resolved |
         Sort-Object { if ($_.SourcePolicyName) { "0_$($_.SourcePolicyName)" } else { "1_" } }, Setting |
         Select-Object SourcePolicyName, Setting, Status, Issue, SourceValue, TargetPolicyName, TargetValue, DefinitionId |
-        Export-Csv "$ExportPath\diff.csv" -NoTypeInformation -Encoding UTF8 -Delimiter ";"
-    Write-Log "Done" "Export ready: $ExportPath\diff.csv" "OK"
+        Export-Csv $diffCsv -NoTypeInformation -Encoding utf8BOM -Delimiter ";"
+    Write-Log "Done" "Export ready: $diffCsv" "OK"
 
     Get-OverlapSummary -Rows $resolved |
-        Export-Csv "$ExportPath\overlap.csv" -NoTypeInformation -Encoding UTF8 -Delimiter ";"
-    Write-Log "Done" "Overlap ready: $ExportPath\overlap.csv" "OK"
+        Export-Csv $overlapCsv -NoTypeInformation -Encoding utf8BOM -Delimiter ";"
+    Write-Log "Done" "Overlap ready: $overlapCsv" "OK"
 
     Get-BaselineSummary -Rows $resolved |
-        Export-Csv "$ExportPath\summary.csv" -NoTypeInformation -Encoding UTF8 -Delimiter ";"
-    Write-Log "Done" "Summary ready: $ExportPath\summary.csv" "OK"
+        Export-Csv $summaryCsv -NoTypeInformation -Encoding utf8BOM -Delimiter ";"
+    Write-Log "Done" "Summary ready: $summaryCsv" "OK"
 
-    $htmlOutputPath = if ($ReportFile) { $ReportFile } else { "$ExportPath\report.html" }
+    $htmlOutputPath = if ($ReportFile) { $ReportFile } else { Join-Path $ExportPath 'report.html' }
     Get-HtmlReport -Rows $resolved -OutputPath $htmlOutputPath -SourceLabel $SourceLabel -TargetLabel $TargetLabel
 
-    # ── 6. Flush category cache ───────────────────────────────────────────────
-    if ($global:CategoryCacheDirty -and $global:CategoriesFilePath) {
-        try {
-            $global:CategoryById.Values | ConvertTo-Json -Depth 10 |
-                Out-File $global:CategoriesFilePath -Encoding UTF8
-            Write-Log "Categories" "Cache updated: $($global:CategoryById.Count) categories saved." "OK"
-        } catch {
-            Write-Log "Categories" "Could not update categories cache file. $_" "WARN"
+    # Give categories fetched from the API during this run back to the caller's
+    # table (the UI session cache), so the next compare in the same session
+    # does not fetch them again. Placeholders stay out.
+    if ($null -ne $CategoryById -and $global:CategoryCacheDirty) {
+        foreach ($k in @($global:CategoryById.Keys)) {
+            $c = $global:CategoryById[$k]
+            if (-not $CategoryById.ContainsKey($k) -and -not $c.PSObject.Properties['__placeholder'] -and
+                $c.displayName -ne '[Unresolved Category]') {
+                $CategoryById[$k] = $c
+            }
         }
     }
+
+    # ── 6. Flush category cache ───────────────────────────────────────────────
+    # Placeholders ("[Unresolved Category]") are session-only and never
+    # written: a temporary API failure must not become permanent on disk.
+    if ($global:CategoryCacheDirty -and $global:CategoriesFilePath) {
+        try {
+            $toSave = @($global:CategoryById.Values | Where-Object {
+                -not $_.PSObject.Properties['__placeholder'] -and $_.displayName -ne '[Unresolved Category]'
+            })
+            $tmp    = "$($global:CategoriesFilePath).tmp"
+            $toSave | ConvertTo-Json -Depth 10 | Out-File -LiteralPath $tmp -Encoding UTF8
+            Move-Item -LiteralPath $tmp -Destination $global:CategoriesFilePath -Force
+            Write-Log "Categories" "Cache updated: $($toSave.Count) categories saved." "OK"
+        } catch {
+            Write-Log "Categories" "Could not update categories cache file. $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    return [PSCustomObject]@{ Success = $true; RowCount = $resolved.Count; ReportFile = $htmlOutputPath }
 }
 
 
