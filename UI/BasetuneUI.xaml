@@ -491,8 +491,13 @@
                                  Margin="8,0,8,8" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsChecked, Mode=TwoWay}"
-                                              Padding="4,3" FontSize="12" VerticalContentAlignment="Center"/>
+                                    <!-- TextBlock instead of Content="{Binding Name}": a CheckBox treats
+                                         the first "_" in its text as an access key and
+                                         hides it (GPO_MOORE_x was shown as GPOMOORE_x). -->
+                                    <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                              Padding="4,3" FontSize="12" VerticalContentAlignment="Center">
+                                        <TextBlock Text="{Binding Name}"/>
+                                    </CheckBox>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                             <ListBox.ItemContainerStyle>
@@ -539,8 +544,13 @@
                                  Margin="8,0,8,8" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsChecked, Mode=TwoWay}"
-                                              Padding="4,3" FontSize="12" VerticalContentAlignment="Center"/>
+                                    <!-- TextBlock instead of Content="{Binding Name}": a CheckBox treats
+                                         the first "_" in its text as an access key and
+                                         hides it (GPO_MOORE_x was shown as GPOMOORE_x). -->
+                                    <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                              Padding="4,3" FontSize="12" VerticalContentAlignment="Center">
+                                        <TextBlock Text="{Binding Name}"/>
+                                    </CheckBox>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                             <ListBox.ItemContainerStyle>
