@@ -310,7 +310,7 @@ function Get-HtmlReport {
     .container { max-width: 1200px; width: 100%; }
     header { margin-bottom: 32px; padding-top: 8px; }
     h1 { font-size: 28px; font-weight: 600; margin: 10px 0 6px; letter-spacing: -0.8px; }
-    .subtitle { font-size: 15px; color: var(--text-sub); margin-bottom: 28px; }
+    .subtitle { font-size: 15px; color: var(--text-main); margin-bottom: 28px; }
     .blue-text { color: var(--primary-blue); font-weight: 600; }
 
     .stats-grid { display: flex; gap: 12px; margin-bottom: 28px; flex-wrap: wrap; }
@@ -395,7 +395,7 @@ function Get-HtmlReport {
         display: inline-block; width: 100px; text-align: center;
         padding: 3px 0; border-radius: 6px;
         font-size: 11px; font-weight: 500; color: var(--text-sub);
-        border: 1px dashed var(--border-color); opacity: 0.6;
+        opacity: 0.6;
     }
 
     tr.main-row { cursor: pointer; }
@@ -404,24 +404,46 @@ function Get-HtmlReport {
     .expand-icon { display: inline-flex; align-items: center; margin-right: 7px; color: var(--text-sub); transition: transform 0.2s; line-height: 1; vertical-align: middle; }
     tr.main-row.expanded .expand-icon { transform: rotate(90deg); }
 
+    /* Detail rows are rows of the main table (not a nested table), so the
+       Target Value column always starts under Source Value, whatever the
+       length of the policy names or values. */
     tr.detail-row td {
         background-color: rgba(26,110,245,0.02);
-        border-bottom: 1px solid var(--border-color);
-        padding: 0;
+        border-bottom: none;
+        padding: 2px 15px; font-size: 12px; line-height: 1.4; color: var(--text-sub);
+        vertical-align: top;
+        word-break: break-word;
     }
     tr.detail-row.hidden { display: none; }
-    .detail-inner { padding: 10px 16px 14px 32px; }
-    .detail-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .detail-table th {
-        text-align: left; padding: 6px 10px; font-size: 10px;
-        font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px;
-        color: var(--text-sub); border-bottom: 1px solid var(--border-color);
-        background: transparent; cursor: default;
+    tr.detail-row td.dt-policy { padding-left: 34px; }
+    tr.detail-row.dt-head td {
+        padding-top: 10px; padding-bottom: 4px; font-size: 10px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.6px;
     }
-    .detail-table th:hover { color: var(--text-sub); }
-    .detail-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-color); color: var(--text-sub); }
-    .detail-table tr:last-child td { border-bottom: none; }
-    .detail-empty { padding: 8px 0; color: var(--text-sub); font-size: 12px; font-style: italic; }
+    tr.detail-row.dt-last td { border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+
+    /* Resizable columns: drag a column border anywhere in the table.
+       Double-click it to reset. Widths are remembered in this browser. */
+    #mainTable th { position: relative; }
+    .col-resizer {
+        position: absolute; top: 0; right: 0; width: 7px; height: 100%;
+        cursor: col-resize; user-select: none; z-index: 1; pointer-events: none;
+    }
+    .col-resizer::after {
+        content: ''; position: absolute; top: 25%; bottom: 25%; right: 3px;
+        width: 1px; background: var(--border-color);
+    }
+    .col-resizer:hover::after, .col-resizer.active::after { background: var(--primary-blue); width: 2px; }
+    #mainTable.resized { table-layout: fixed; }
+    #mainTable.resized td.col-policy,
+    #mainTable.resized td.col-setting,
+    #mainTable.resized td.col-value { max-width: none; }
+    /* Fixed layout: long words wrap inside their own column instead of
+       running into the next one; header text is cut off with "...". */
+    #mainTable.resized td { overflow-wrap: anywhere; }
+    #mainTable.resized th { overflow: hidden; text-overflow: ellipsis; }
+    body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none !important; }
+    tr.detail-row td.dt-empty { padding: 10px 15px 12px 34px; font-style: italic; }
 
     .pagination {
         display: flex; align-items: center; gap: 6px;
@@ -450,13 +472,13 @@ function Get-HtmlReport {
 
 <div class="container">
     <header>
-        <h1>Baseline <span class="blue-text">Comparison</span> Report</h1>
+        <h1>Baseline Comparison Report</h1>
         $(if ($SourceLabel -or $TargetLabel) {
             # Tenant display names come from Config.json; encode them so a
             # name with & or < cannot break the page.
             $src = [System.Net.WebUtility]::HtmlEncode($(if ($SourceLabel) { $SourceLabel } else { 'Source' }))
             $tgt = [System.Net.WebUtility]::HtmlEncode($(if ($TargetLabel) { $TargetLabel } else { 'Target' }))
-            "<p class=`"subtitle`"><span style=`"color:var(--primary-blue)`">$src</span> &nbsp;&rarr;&nbsp; <span style=`"color:var(--primary-blue)`">$tgt</span> &nbsp;&middot;&nbsp; Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm') &nbsp;&middot;&nbsp; $totalSettings settings</p>"
+            "<p class=`"subtitle`">$src &nbsp;&rarr;&nbsp; $tgt &nbsp;&middot;&nbsp; Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm') &nbsp;&middot;&nbsp; $totalSettings settings</p>"
         } else {
             "<p class=`"subtitle`">Generated on $(Get-Date -Format 'yyyy-MM-dd HH:mm') &nbsp;&middot;&nbsp; $totalSettings settings</p>"
         })
@@ -582,24 +604,23 @@ function Get-HtmlReport {
                 '<td class="col-issue">'  + (issueBadge[r.issue] ? issueBadge[r.issue](r.tcount) : esc(r.issue)) + '</td>' +
                 '</tr>';
 
-            // Detail row (hidden by default)
-            html += '<tr class="detail-row hidden" id="detail-' + idx + '">' +
-                '<td colspan="5"><div class="detail-inner">';
-
+            // Detail rows (hidden by default): target policy under Policy +
+            // Setting, target value under Source Value, so they line up.
+            var dc = 'detail-row hidden detail-' + idx;
             if (hasTargets) {
-                html += '<table class="detail-table"><thead><tr>' +
-                    '<th>Target Policy</th><th>Target Value</th>' +
-                    '</tr></thead><tbody>';
+                html += '<tr class="' + dc + ' dt-head">' +
+                    '<td colspan="2" class="dt-policy">Target Policy</td><td colspan="3">Target Value</td></tr>';
                 for (var j = 0; j < r.targets.length; j++) {
                     var t = r.targets[j];
-                    html += '<tr><td>' + esc(t.name) + '</td><td>' + esc(t.value) + '</td></tr>';
+                    var last = (j === r.targets.length - 1) ? ' dt-last' : '';
+                    html += '<tr class="' + dc + last + '">' +
+                        '<td colspan="2" class="dt-policy">' + esc(t.name) + '</td>' +
+                        '<td colspan="3">' + esc(t.value) + '</td></tr>';
                 }
-                html += '</tbody></table>';
             } else {
-                html += '<span class="detail-empty">No matching target policies found.</span>';
+                html += '<tr class="' + dc + ' dt-last">' +
+                    '<td colspan="5" class="dt-empty">No matching target policies found.</td></tr>';
             }
-
-            html += '</div></td></tr>';
         }
 
         tbody.innerHTML = html;
@@ -615,10 +636,10 @@ function Get-HtmlReport {
 
     function toggleDetail(idx) {
         var mainRow   = document.getElementById('row-'   + idx);
-        var detailRow = document.getElementById('detail-' + idx);
-        if (!detailRow) return;
-        var isOpen = !detailRow.classList.contains('hidden');
-        detailRow.classList.toggle('hidden', isOpen);
+        var detailRows = document.querySelectorAll('tr.detail-' + idx);
+        if (!detailRows.length) return;
+        var isOpen = !detailRows[0].classList.contains('hidden');
+        for (var k = 0; k < detailRows.length; k++) detailRows[k].classList.toggle('hidden', isOpen);
         mainRow.classList.toggle('expanded', !isOpen);
     }
 
@@ -745,6 +766,144 @@ function Get-HtmlReport {
     }
 
     applyFilters();
+
+    // ── Resizable columns ────────────────────────────────────────────────
+    // Fixed layout, so expanding a row or paging never makes columns jump.
+    //   Status, Issue : fixed 130px (they only hold a badge)
+    //   Policy, Setting: % of the table width, resizable
+    //   Source Value  : takes the rest
+    // Drag a border (Policy|Setting, Setting|Source Value or Source Value|
+    // Status) anywhere in the table, header or rows. Status and Issue keep
+    // their width: making Source Value wider takes the space from Setting,
+    // then Policy. Double-click a border to reset. Remembered per browser.
+    (function () {
+        var table = document.getElementById('mainTable');
+        var ths   = Array.prototype.slice.call(table.querySelectorAll('thead th'));
+        var KEY   = 'basetune-col-widths-v4';
+        var GRAB  = 5;          // px either side of a border that starts a drag
+        var FIXED = 130;        // Status / Issue
+        var MIN   = [120, 200, 150];   // Policy, Setting, Source Value
+        var drag  = null;
+
+        function tw() { return table.getBoundingClientRect().width || 1; }
+        function px(i) { return ths[i].getBoundingClientRect().width; }
+        function room() { return tw() - 2 * FIXED; }   // for the 3 text columns
+        // Clamp Policy/Setting (px) so every text column keeps its minimum.
+        function clamp(p, st) {
+            var r = room();
+            p  = Math.max(MIN[0], Math.min(p,  r - MIN[1] - MIN[2]));
+            st = Math.max(MIN[1], Math.min(st, r - p - MIN[2]));
+            return [p, st];
+        }
+        function apply(p, st) {
+            var c = clamp(p, st), t = tw();
+            ths[0].style.width = (c[0] * 100 / t).toFixed(3) + '%';
+            ths[1].style.width = (c[1] * 100 / t).toFixed(3) + '%';
+            ths[2].style.width = '';
+            ths[3].style.width = FIXED + 'px';
+            ths[4].style.width = FIXED + 'px';
+            table.classList.add('resized');
+        }
+        function freeze() {
+            // Lock in the browser's own layout of the first page.
+            table.classList.remove('resized');
+            ths.forEach(function (th) { th.style.width = ''; });
+            apply(px(0), px(1));
+        }
+        function save() {
+            try { localStorage.setItem(KEY, JSON.stringify([px(0) * 100 / tw(), px(1) * 100 / tw()])); } catch (e) {}
+        }
+        function reset() {
+            try { localStorage.removeItem(KEY); } catch (e) {}
+            freeze();
+        }
+        // 0 = Policy|Setting, 1 = Setting|Source Value, 2 = Source Value|Status.
+        function borderAt(x) {
+            for (var i = 0; i < 3; i++) {
+                if (Math.abs(ths[i].getBoundingClientRect().right - x) <= GRAB) return i;
+            }
+            return -1;
+        }
+
+        table.addEventListener('mousemove', function (e) {
+            if (drag) return;
+            table.style.cursor = borderAt(e.clientX) >= 0 ? 'col-resize' : '';
+        });
+        table.addEventListener('mouseleave', function () { if (!drag) table.style.cursor = ''; });
+
+        table.addEventListener('mousedown', function (e) {
+            if (e.button !== 0) return;
+            var i = borderAt(e.clientX);
+            if (i < 0) return;
+            e.preventDefault(); e.stopPropagation();
+            drag = { i: i, x: e.clientX, p: px(0), s: px(1), v: px(2) };
+            document.body.classList.add('col-resizing');
+            var r = ths[i].querySelector('.col-resizer'); if (r) r.classList.add('active');
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!drag) return;
+            var dx = e.clientX - drag.x;
+            if (drag.i === 0) {
+                // Move the Policy|Setting border: Setting gives/takes the space.
+                var pair = drag.p + drag.s;
+                var p = Math.max(MIN[0], Math.min(drag.p + dx, pair - MIN[1]));
+                apply(p, pair - p);
+            } else if (drag.i === 1) {
+                // Move the Setting|Source Value border: Source Value takes the rest.
+                apply(drag.p, drag.s + dx);
+            } else {
+                // Move the Source Value|Status border: Status/Issue stay put,
+                // so Setting (then Policy) gives or takes the space.
+                var v    = Math.max(MIN[2], Math.min(drag.v + dx, room() - MIN[0] - MIN[1]));
+                var rest = room() - v;                 // for Policy + Setting
+                var st   = Math.max(MIN[1], rest - drag.p);
+                apply(rest - st, st);
+            }
+        });
+        document.addEventListener('mouseup', function () {
+            if (!drag) return;
+            var r = ths[drag.i].querySelector('.col-resizer'); if (r) r.classList.remove('active');
+            drag = null;
+            document.body.classList.remove('col-resizing');
+            table.style.cursor = '';
+            save();
+            // The mouseup after a drag counts as a click (= sort a column or
+            // open a row). Swallow that one click.
+            function swallow(ce) {
+                ce.stopPropagation(); ce.preventDefault();
+                window.removeEventListener('click', swallow, true);
+            }
+            window.addEventListener('click', swallow, true);
+            setTimeout(function () { window.removeEventListener('click', swallow, true); }, 300);
+        });
+        table.addEventListener('dblclick', function (e) {
+            if (borderAt(e.clientX) < 0) return;
+            e.preventDefault(); e.stopPropagation();
+            reset();
+        }, true);
+
+        // Visual marker on the two resizable header borders.
+        [0, 1, 2].forEach(function (i) {
+            var h = document.createElement('div');
+            h.className = 'col-resizer';
+            h.title = 'Drag to resize. Double-click to reset.';
+            ths[i].appendChild(h);
+        });
+
+        // Smaller window: keep the minimum widths (Setting/Policy shrink first).
+        window.addEventListener('resize', function () {
+            if (table.classList.contains('resized')) apply(px(0), px(1));
+        });
+
+        var saved = null;
+        try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
+        if (saved && saved.length === 2) {
+            table.classList.add('resized');
+            apply(saved[0] * tw() / 100, saved[1] * tw() / 100);
+        } else {
+            freeze();
+        }
+    })();
 </script>
 </body>
 </html>
