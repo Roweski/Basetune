@@ -194,8 +194,7 @@ The HTML report (`report.html`) lets you drill down per setting — expand any r
 
 <br>
 
-![Basetune Report](docs/report.png)
-
+![Basetune Report](docs/report_new.png)
 <br>
 
 ---
