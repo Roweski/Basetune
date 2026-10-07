@@ -8,6 +8,9 @@
 
 ---
 
+![Basetune Report](docs/report_new.png)
+<br>
+
 ## Requirements
 
 - PowerShell 7+
@@ -35,6 +38,7 @@ Click the blue download icon in the UI status bar and select the online tenant f
 ```powershell
    .\BasetuneCLI.ps1 -SourceId <tenant id> -TargetId <tenant id>
 ```
+
 
 ---
 
@@ -117,7 +121,7 @@ Run the CLI with `-Download -Id <tenant id>`. The Id represents the unique key i
 Run the UI. When setting definitions are not yet available, the Download icon in the status bar is highlighted in blue — click it to start.
 
 <a href="docs/controls.png" target="_blank">
-  <img src="docs/controls.png" alt="Status bar with the Download icon highlighted" width="100">
+  <img src="docs/controls.png" alt="Status bar with the Download icon highlighted" width="75">
 </a>
 
 Select a tenant from the list, or create a new one in tenant configuration using an app registration.
@@ -129,7 +133,7 @@ Select a tenant from the list, or create a new one in tenant configuration using
 Once the download completes, the icon returns to its neutral state — definitions are cached and ready to use.
 
 <a href="docs/controls2.png" target="_blank">
-  <img src="docs/controls2.png" alt="Status bar after definitions have been downloaded" width="100">
+  <img src="docs/controls2.png" alt="Status bar after definitions have been downloaded" width="75">
 </a>
 
 ---
@@ -188,23 +192,15 @@ On top of that, it detects cross-policy issues within the target tenant:
 | `summary.csv` | Per baseline policy: Total / Match / Missing / Diff counts + Compliance % |
 | `overlap.csv` | Only Duplicate and Conflict settings, with all involved target policies and values |
 
-<br>
-
-The HTML report (`report.html`) lets you drill down per setting — expand any row to see exactly which target policies contain that setting and what value each one has. The report header shows the source and target tenant names.
-
-<br>
-
-![Basetune Report](docs/report.png)
-
-<br>
-
 ---
 
 ## UI
 
 Basetune includes a WPF-based UI for configuring and running comparisons without using the command line.
 
-![Basetune UI](docs/ui.png)
+<a href="docs/ui.png" target="_blank">
+  <img src="docs/ui.png" alt="Status bar after definitions have been downloaded" width="650">
+</a>
 
 ### Running the UI
 
@@ -227,13 +223,13 @@ Manage all tenants via Tenant Configuration.
 Online tenant using an App Registration:
 
 <a href="docs/tenant.png" target="_blank">
-  <img src="docs/tenant.png" alt="Tenant Configuration" width="580">
+  <img src="docs/tenant.png" alt="Tenant Configuration" width="320">
 </a>
 
 Offline baseline using exported JSON policies:
 
 <a href="docs/json.png" target="_blank">
-  <img src="docs/json.png" alt="Tenant Configuration" width="580">
+  <img src="docs/json.png" alt="Tenant Configuration" width="320">
 </a>
 
 
@@ -251,7 +247,9 @@ Configure the default report folder and set the number of parallel threads used 
 
 Basetune includes a command-line interface for running comparisons and exports from a terminal or automation script.
 
-![Basetune CLI](docs/cli.png)
+<a href="docs/cli.png" target="_blank">
+  <img src="docs/cli.png" alt="Status bar after definitions have been downloaded" width="650">
+</a>
 
 ### Running the CLI
 
