@@ -445,7 +445,7 @@ function Get-HtmlReport {
     tr.detail-row.dt-end td { padding: 0; height: 8px; border-bottom: 1px solid var(--border-color); }
 
     /* Resizable columns: drag a column border anywhere in the table.
-       Double-click it to reset. Widths are remembered in this browser. */
+       Double-click it to reset. */
     #mainTable th { position: relative; }
     .col-resizer {
         position: absolute; top: 0; right: 0; width: 7px; height: 100%;
@@ -806,11 +806,11 @@ function Get-HtmlReport {
     // Drag a border (Policy|Setting, Setting|Source Value or Source Value|
     // Status) anywhere in the table, header or rows. Status and Issue keep
     // their width: making Source Value wider takes the space from Setting,
-    // then Policy. Double-click a border to reset. Remembered per browser.
+    // then Policy. Double-click a border to reset. Every report opens with
+    // the default layout (widths are not stored).
     (function () {
         var table = document.getElementById('mainTable');
         var ths   = Array.prototype.slice.call(table.querySelectorAll('thead th'));
-        var KEY   = 'basetune-col-widths-v4';
         var GRAB  = 7;          // px either side of a border that starts a drag
         var FIXED = 130;        // Status / Issue
         var MIN   = [120, 200, 150];   // Policy, Setting, Source Value
@@ -841,13 +841,7 @@ function Get-HtmlReport {
             ths.forEach(function (th) { th.style.width = ''; });
             apply(px(0), px(1));
         }
-        function save() {
-            try { localStorage.setItem(KEY, JSON.stringify([px(0) * 100 / tw(), px(1) * 100 / tw()])); } catch (e) {}
-        }
-        function reset() {
-            try { localStorage.removeItem(KEY); } catch (e) {}
-            freeze();
-        }
+        function reset() { freeze(); }
         // 0 = Policy|Setting, 1 = Setting|Source Value, 2 = Source Value|Status.
         function borderAt(x) {
             for (var i = 0; i < 3; i++) {
@@ -899,7 +893,6 @@ function Get-HtmlReport {
             drag = null;
             document.body.classList.remove('col-resizing');
             hover(-1);
-            save();
             // The mouseup after a drag counts as a click (= sort a column or
             // open a row). Swallow that one click.
             function swallow(ce) {
@@ -928,14 +921,8 @@ function Get-HtmlReport {
             if (table.classList.contains('resized')) apply(px(0), px(1));
         });
 
-        var saved = null;
-        try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
-        if (saved && saved.length === 2) {
-            table.classList.add('resized');
-            apply(saved[0] * tw() / 100, saved[1] * tw() / 100);
-        } else {
-            freeze();
-        }
+        // Start: lock in the browser's own layout of the first page.
+        freeze();
     })();
 </script>
 </body>
