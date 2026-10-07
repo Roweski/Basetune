@@ -117,7 +117,7 @@ Run the CLI with `-Download -Id <tenant id>`. The Id represents the unique key i
 Run the UI. When setting definitions are not yet available, the Download icon in the status bar is highlighted in blue — click it to start.
 
 <a href="docs/controls.png" target="_blank">
-  <img src="docs/controls.png" alt="Status bar with the Download icon highlighted" width="100">
+  <img src="docs/controls.png" alt="Status bar with the Download icon highlighted" width="75">
 </a>
 
 Select a tenant from the list, or create a new one in tenant configuration using an app registration.
@@ -129,7 +129,7 @@ Select a tenant from the list, or create a new one in tenant configuration using
 Once the download completes, the icon returns to its neutral state — definitions are cached and ready to use.
 
 <a href="docs/controls2.png" target="_blank">
-  <img src="docs/controls2.png" alt="Status bar after definitions have been downloaded" width="100">
+  <img src="docs/controls2.png" alt="Status bar after definitions have been downloaded" width="75">
 </a>
 
 ---
@@ -203,7 +203,9 @@ The HTML report (`report.html`) lets you drill down per setting — expand any r
 
 Basetune includes a WPF-based UI for configuring and running comparisons without using the command line.
 
-![Basetune UI](docs/ui.png)
+<a href="docs/ui.png" target="_blank">
+  <img src="docs/ui.png" alt="Status bar after definitions have been downloaded" width="650">
+</a>
 
 ### Running the UI
 
@@ -226,13 +228,13 @@ Manage all tenants via Tenant Configuration.
 Online tenant using an App Registration:
 
 <a href="docs/tenant.png" target="_blank">
-  <img src="docs/tenant.png" alt="Tenant Configuration" width="580">
+  <img src="docs/tenant.png" alt="Tenant Configuration" width="320">
 </a>
 
 Offline baseline using exported JSON policies:
 
 <a href="docs/json.png" target="_blank">
-  <img src="docs/json.png" alt="Tenant Configuration" width="580">
+  <img src="docs/json.png" alt="Tenant Configuration" width="320">
 </a>
 
 
@@ -250,7 +252,9 @@ Configure the default report folder and set the number of parallel threads used 
 
 Basetune includes a command-line interface for running comparisons and exports from a terminal or automation script.
 
-![Basetune CLI](docs/cli.png)
+<a href="docs/cli.png" target="_blank">
+  <img src="docs/cli.png" alt="Status bar after definitions have been downloaded" width="650">
+</a>
 
 ### Running the CLI
 
