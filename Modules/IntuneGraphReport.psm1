@@ -307,7 +307,9 @@ function Get-HtmlReport {
     .sun-icon { display: none; }
     .dark-mode .sun-icon { display: block; }
     .dark-mode .moon-icon { display: none; }
-    .container { max-width: 1200px; width: 100%; }
+    /* Follows the window width up to 2400px (4K at 150% = 2560px, 34" ultrawide = 3440px):
+       wider than that, a row gets too long to read. */
+    .container { max-width: 2400px; width: 100%; }
     header { margin-bottom: 32px; padding-top: 8px; }
     h1 { font-size: 28px; font-weight: 600; margin: 10px 0 6px; letter-spacing: -0.8px; }
     .subtitle { font-size: 15px; color: var(--text-main); margin-bottom: 28px; }
@@ -801,8 +803,9 @@ function Get-HtmlReport {
     // ── Resizable columns ────────────────────────────────────────────────
     // Fixed layout, so expanding a row or paging never makes columns jump.
     //   Status, Issue : fixed 130px (they only hold a badge)
-    //   Policy, Setting: % of the table width, resizable
+    //   Policy, Setting: % of the table width (default 20% / 38%), resizable
     //   Source Value  : takes the rest
+    // Percentages, so the columns grow and shrink with the window.
     // Drag a border (Policy|Setting, Setting|Source Value or Source Value|
     // Status) anywhere in the table, header or rows. Status and Issue keep
     // their width: making Source Value wider takes the space from Setting,
@@ -814,6 +817,7 @@ function Get-HtmlReport {
         var GRAB  = 7;          // px either side of a border that starts a drag
         var FIXED = 130;        // Status / Issue
         var MIN   = [120, 200, 150];   // Policy, Setting, Source Value
+        var DEF   = [0.20, 0.38];      // default Policy / Setting share of the table
         var drag  = null;
 
         function tw() { return table.getBoundingClientRect().width || 1; }
@@ -836,10 +840,8 @@ function Get-HtmlReport {
             table.classList.add('resized');
         }
         function freeze() {
-            // Lock in the browser's own layout of the first page.
-            table.classList.remove('resized');
-            ths.forEach(function (th) { th.style.width = ''; });
-            apply(px(0), px(1));
+            // Default layout: fixed percentages of the table width.
+            apply(tw() * DEF[0], tw() * DEF[1]);
         }
         function reset() { freeze(); }
         // 0 = Policy|Setting, 1 = Setting|Source Value, 2 = Source Value|Status.
@@ -921,7 +923,7 @@ function Get-HtmlReport {
             if (table.classList.contains('resized')) apply(px(0), px(1));
         });
 
-        // Start: lock in the browser's own layout of the first page.
+        // Start: default layout.
         freeze();
     })();
 </script>
