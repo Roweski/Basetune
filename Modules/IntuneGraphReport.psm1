@@ -248,7 +248,7 @@ function Get-HtmlReport {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Basetune - Baseline Report</title>
+<title>Basetune - Baseline Comparison Report</title>
 <style>
     :root {
         --primary-blue: #1a6ef5;
@@ -313,10 +313,16 @@ function Get-HtmlReport {
     .subtitle { font-size: 15px; color: var(--text-main); margin-bottom: 28px; }
     .blue-text { color: var(--primary-blue); font-weight: 600; }
 
-    .stats-grid { display: flex; gap: 12px; margin-bottom: 28px; flex-wrap: wrap; }
+    /* Tiles and filter bar share one 6-column grid, so the filters line up
+       with the tiles: Search under Total+Match, Status under Diff, Issue
+       under Missing, Policy under Duplicate+Conflict. */
+    .stats-grid, .filters {
+        display: grid; grid-template-columns: repeat(6, 132px); gap: 12px;
+    }
+    .stats-grid { margin-bottom: 28px; }
     .stat-card {
         background: var(--bg-card); border: 1px solid var(--border-color);
-        border-radius: 12px; padding: 16px 20px; min-width: 100px;
+        border-radius: 12px; padding: 16px 20px; min-width: 0;
         box-shadow: var(--card-shadow); cursor: pointer;
         transition: border-color 0.15s, box-shadow 0.15s;
     }
@@ -334,13 +340,20 @@ function Get-HtmlReport {
     .stat-card.s-dup     .s-value { color: #9aa3ae; }
     .stat-card.s-conflict .s-value { color: #dc2626; }
 
-    .filters {
-        display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;
+    .filters { margin-bottom: 16px; align-items: center; }
+    .filters > * { width: 100%; min-width: 0; }
+    #search, #filterPolicy { grid-column: span 2; }
+    /* Narrow window: fall back to wrapping boxes. */
+    @media (max-width: 900px) {
+        .stats-grid, .filters { display: flex; flex-wrap: wrap; }
+        .stat-card { min-width: 100px; }
+        .filters > * { width: auto; }
+        #search { width: 260px; }
     }
     .filters input[type=text] {
         background: var(--bg-card); border: 1px solid var(--border-color);
         border-radius: 8px; color: var(--text-main);
-        font-size: 13px; padding: 8px 14px; width: 260px; outline: none;
+        font-size: 13px; padding: 8px 14px; outline: none;
         transition: border-color 0.2s;
     }
     .filters input[type=text]:focus { border-color: var(--primary-blue); }
@@ -349,7 +362,7 @@ function Get-HtmlReport {
         border-radius: 8px; color: var(--text-main);
         font-size: 13px; padding: 8px 14px; outline: none; cursor: pointer;
     }
-    #filterPolicy { max-width: 260px; }
+    #filterPolicy { text-overflow: ellipsis; }
     .row-count { font-size: 12px; color: var(--text-sub); margin-bottom: 10px; }
 
     .content-card {
@@ -357,7 +370,9 @@ function Get-HtmlReport {
         box-shadow: var(--card-shadow); border: 1px solid var(--border-color);
         overflow: hidden;
     }
-    .table-wrapper { overflow-x: auto; }
+    /* overflow-y hidden: the table never needs its own vertical scrollbar
+       (the page scrolls); without it a 1px rounding difference could show one. */
+    .table-wrapper { overflow-x: auto; overflow-y: hidden; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th {
         text-align: left; padding: 14px 15px; color: var(--text-sub);
@@ -415,19 +430,26 @@ function Get-HtmlReport {
         word-break: break-word;
     }
     tr.detail-row.hidden { display: none; }
+    /* Hover on one target line (policy + value): same colour as the hover
+       on a main row, so the matching value is easy to follow. */
+    tr.detail-row:hover td { background-color: rgba(26,110,245,0.02); }
+    tr.detail-row.dt-item:hover td { background-color: rgba(26,110,245,0.04); }
     tr.detail-row td.dt-policy { padding-left: 34px; }
     tr.detail-row.dt-head td {
         padding-top: 10px; padding-bottom: 4px; font-size: 10px; font-weight: 600;
         text-transform: uppercase; letter-spacing: 0.6px;
     }
     tr.detail-row.dt-last td { border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+    /* Empty closing row after the targets: holds the bottom spacing and
+       border, so every target line (also the last) has the same height. */
+    tr.detail-row.dt-end td { padding: 0; height: 8px; border-bottom: 1px solid var(--border-color); }
 
     /* Resizable columns: drag a column border anywhere in the table.
        Double-click it to reset. Widths are remembered in this browser. */
     #mainTable th { position: relative; }
     .col-resizer {
         position: absolute; top: 0; right: 0; width: 7px; height: 100%;
-        cursor: col-resize; user-select: none; z-index: 1; pointer-events: none;
+        user-select: none; z-index: 1; pointer-events: none;
     }
     .col-resizer::after {
         content: ''; position: absolute; top: 25%; bottom: 25%; right: 3px;
@@ -442,7 +464,12 @@ function Get-HtmlReport {
        running into the next one; header text is cut off with "...". */
     #mainTable.resized td { overflow-wrap: anywhere; }
     #mainTable.resized th { overflow: hidden; text-overflow: ellipsis; }
-    body.col-resizing, body.col-resizing * { cursor: col-resize !important; user-select: none !important; }
+    /* Near a draggable border (or while dragging) the cursor becomes the
+       left-right arrow everywhere, also over rows and headers that normally
+       show the hand cursor. */
+    #mainTable.near-border, #mainTable.near-border *,
+    body.col-resizing, body.col-resizing * { cursor: ew-resize !important; }
+    body.col-resizing, body.col-resizing * { user-select: none !important; }
     tr.detail-row td.dt-empty { padding: 10px 15px 12px 34px; font-style: italic; }
 
     .pagination {
@@ -612,11 +639,11 @@ function Get-HtmlReport {
                     '<td colspan="2" class="dt-policy">Target Policy</td><td colspan="3">Target Value</td></tr>';
                 for (var j = 0; j < r.targets.length; j++) {
                     var t = r.targets[j];
-                    var last = (j === r.targets.length - 1) ? ' dt-last' : '';
-                    html += '<tr class="' + dc + last + '">' +
+                    html += '<tr class="' + dc + ' dt-item">' +
                         '<td colspan="2" class="dt-policy">' + esc(t.name) + '</td>' +
                         '<td colspan="3">' + esc(t.value) + '</td></tr>';
                 }
+                html += '<tr class="' + dc + ' dt-end"><td colspan="5"></td></tr>';
             } else {
                 html += '<tr class="' + dc + ' dt-last">' +
                     '<td colspan="5" class="dt-empty">No matching target policies found.</td></tr>';
@@ -760,7 +787,11 @@ function Get-HtmlReport {
         filtered.sort((a, b) => {
             const ta = (a[key] ?? '').toLowerCase();
             const tb = (b[key] ?? '').toLowerCase();
-            return sortAsc ? ta.localeCompare(tb) : tb.localeCompare(ta);
+            let c = ta.localeCompare(tb);
+            // Issue: same type (Conflict / Duplicate) -> sort on the number
+            // of target policies, so Conflict (2) comes before Conflict (8).
+            if (c === 0 && key === 'issue') c = (Number(a.tcount) || 0) - (Number(b.tcount) || 0);
+            return sortAsc ? c : -c;
         });
         if (rerender) renderPage();
     }
@@ -780,7 +811,7 @@ function Get-HtmlReport {
         var table = document.getElementById('mainTable');
         var ths   = Array.prototype.slice.call(table.querySelectorAll('thead th'));
         var KEY   = 'basetune-col-widths-v4';
-        var GRAB  = 5;          // px either side of a border that starts a drag
+        var GRAB  = 7;          // px either side of a border that starts a drag
         var FIXED = 130;        // Status / Issue
         var MIN   = [120, 200, 150];   // Policy, Setting, Source Value
         var drag  = null;
@@ -825,11 +856,13 @@ function Get-HtmlReport {
             return -1;
         }
 
+        function hover(i) { table.classList.toggle('near-border', i >= 0); }
+
         table.addEventListener('mousemove', function (e) {
             if (drag) return;
-            table.style.cursor = borderAt(e.clientX) >= 0 ? 'col-resize' : '';
+            hover(borderAt(e.clientX));
         });
-        table.addEventListener('mouseleave', function () { if (!drag) table.style.cursor = ''; });
+        table.addEventListener('mouseleave', function () { if (!drag) hover(-1); });
 
         table.addEventListener('mousedown', function (e) {
             if (e.button !== 0) return;
@@ -865,7 +898,7 @@ function Get-HtmlReport {
             var r = ths[drag.i].querySelector('.col-resizer'); if (r) r.classList.remove('active');
             drag = null;
             document.body.classList.remove('col-resizing');
-            table.style.cursor = '';
+            hover(-1);
             save();
             // The mouseup after a drag counts as a click (= sort a column or
             // open a row). Swallow that one click.
