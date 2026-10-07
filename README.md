@@ -8,6 +8,9 @@
 
 ---
 
+![Basetune Report](docs/report_new.png)
+<br>
+
 ## Requirements
 
 - PowerShell 7+
@@ -35,6 +38,7 @@ Click the blue download icon in the UI status bar and select the online tenant f
 ```powershell
    .\BasetuneCLI.ps1 -SourceId <tenant id> -TargetId <tenant id>
 ```
+
 
 ---
 
@@ -187,15 +191,6 @@ On top of that, it detects cross-policy issues within the target tenant:
 | `report.html` | Visual overview — one row per unique setting with aggregated status |
 | `summary.csv` | Per baseline policy: Total / Match / Missing / Diff counts + Compliance % |
 | `overlap.csv` | Only Duplicate and Conflict settings, with all involved target policies and values |
-
-<br>
-
-The HTML report (`report.html`) lets you drill down per setting — expand any row to see exactly which target policies contain that setting and what value each one has. The report header shows the source and target tenant names.
-
-<br>
-
-![Basetune Report](docs/report_new.png)
-<br>
 
 ---
 
