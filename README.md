@@ -176,7 +176,7 @@ For every setting, the report identifies:
 - **Match** — the setting is present in the target with the same value
 - **Diff** — the setting is present but the value differs
 - **Missing** — the setting is not present in the target at all
-- **Extra** — the setting is present in the target but not in the source (`diff.csv` only)
+- **Extra** — the setting is present in the target but not in the source
 
 On top of that, it detects cross-policy issues within the target tenant:
 
