@@ -8,7 +8,7 @@
 
 ---
 
-![Basetune Report](docs/report_new.png)
+![Basetune Report](docs/report_extra.png)
 <br>
 
 ## Requirements
