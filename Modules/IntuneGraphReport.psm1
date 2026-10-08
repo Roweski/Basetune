@@ -148,6 +148,8 @@ function Get-OverlapSummary {
 #   Setting          — human-readable setting name
 #   SourceValue      — value in the baseline
 #   Status           — Match / Diff / Missing  (aggregated across N target rows)
+#                      Extra = only in the target; these rows come last,
+#                      without policy or source value
 #   Issue            — None / Duplicate / Conflict
 #
 # Status aggregation per DefinitionId:
@@ -204,7 +206,38 @@ function Get-HtmlReport {
         }
     }
 
-    $settings = $settings | Sort-Object SourcePolicyName, Setting, SourceValue
+    $settings = @($settings | Sort-Object SourcePolicyName, Setting, SourceValue)
+
+    # ── Extra settings: only in the target, not in the baseline ──────────────
+    # One row per setting, without a policy or source value. The target
+    # policies that carry it are listed in the expandable detail rows, the
+    # same way as for the baseline settings. Issue follows the same rule as
+    # Merge-EnabledWithChildren: one target policy = None, several with the
+    # same value = Duplicate, several with different values = Conflict. It is
+    # derived here as well, because without definitions that merge does not run.
+    $extraRows = @($Rows | Where-Object { -not $_.SourcePolicyName -and $_.Status -eq 'Extra' })
+    $extras = foreach ($g in ($extraRows | Group-Object -Property Setting)) {
+        $targets = @($g.Group | Where-Object { $_.TargetPolicyName } |
+            Sort-Object TargetPolicyName -Unique |
+            ForEach-Object {
+                [ordered]@{ name = $_.TargetPolicyName; value = $_.TargetValue }
+            })
+        $values = @($targets | ForEach-Object { [string]$_.value } | Sort-Object -Unique)
+        $issue  = if ($targets.Count -le 1) { 'None' }
+                  elseif ($values.Count -le 1) { 'Duplicate' }
+                  else { 'Conflict' }
+
+        [PSCustomObject]@{
+            SourcePolicyName = ''
+            Setting          = $g.Name
+            SourceValue      = ''
+            Status           = 'Extra'
+            Issue            = $issue
+            TargetCount      = $targets.Count
+            Targets          = $targets
+        }
+    }
+    $settings = @($settings) + @($extras | Sort-Object Setting)
 
     # ── Build JSON data array for JS ─────────────────────────────────────────
     $jsonRows = foreach ($s in $settings) {
@@ -239,6 +272,7 @@ function Get-HtmlReport {
     $countMatch     = @($settings | Where-Object { $_.Status -eq 'Match'   }).Count
     $countDiff      = @($settings | Where-Object { $_.Status -eq 'Diff'    }).Count
     $countMissing   = @($settings | Where-Object { $_.Status -eq 'Missing' }).Count
+    $countExtra     = @($settings | Where-Object { $_.Status -eq 'Extra'   }).Count
     $countDuplicate = @($settings | Where-Object { $_.Issue  -eq 'Duplicate' }).Count
     $countConflict  = @($settings | Where-Object { $_.Issue  -eq 'Conflict'  }).Count
 
@@ -263,6 +297,7 @@ function Get-HtmlReport {
         --status-match-bg: #16a34a;   --status-match-text: #ffffff;
         --status-diff-bg: #f0a340;    --status-diff-text: #ffffff;
         --status-missing-bg: #1a6ef5; --status-missing-text: #ffffff;
+        --status-extra-bg: #8b5cf6;   --status-extra-text: #ffffff;
         --issue-conflict-bg: #dc2626; --issue-conflict-text: #ffffff;
         --issue-duplicate-bg: #9aa3ae;--issue-duplicate-text: #ffffff;
         --logo-bg: #e8f0fe;
@@ -315,11 +350,11 @@ function Get-HtmlReport {
     .subtitle { font-size: 15px; color: var(--text-main); margin-bottom: 28px; }
     .blue-text { color: var(--primary-blue); font-weight: 600; }
 
-    /* Tiles and filter bar share one 6-column grid, so the filters line up
+    /* Tiles and filter bar share one 7-column grid, so the filters line up
        with the tiles: Search under Total+Match, Status under Diff, Issue
-       under Missing, Policy under Duplicate+Conflict. */
+       under Missing, Policy under Extra+Duplicate+Conflict. */
     .stats-grid, .filters {
-        display: grid; grid-template-columns: repeat(6, 132px); gap: 12px;
+        display: grid; grid-template-columns: repeat(7, 132px); gap: 12px;
     }
     .stats-grid { margin-bottom: 28px; }
     .stat-card {
@@ -339,12 +374,14 @@ function Get-HtmlReport {
     .stat-card.s-match   .s-value { color: #16a34a; }
     .stat-card.s-diff    .s-value { color: #f0a340; }
     .stat-card.s-missing .s-value { color: var(--primary-blue); }
+    .stat-card.s-extra   .s-value { color: #8b5cf6; }
     .stat-card.s-dup     .s-value { color: #9aa3ae; }
     .stat-card.s-conflict .s-value { color: #dc2626; }
 
     .filters { margin-bottom: 16px; align-items: center; }
     .filters > * { width: 100%; min-width: 0; }
-    #search, #filterPolicy { grid-column: span 2; }
+    #search { grid-column: span 2; }
+    #filterPolicy { grid-column: span 3; }
     /* Narrow window: fall back to wrapping boxes. */
     @media (max-width: 900px) {
         .stats-grid, .filters { display: flex; flex-wrap: wrap; }
@@ -406,6 +443,7 @@ function Get-HtmlReport {
     .val-match     { background: var(--status-match-bg);    color: var(--status-match-text); }
     .val-diff      { background: var(--status-diff-bg);     color: var(--status-diff-text); }
     .val-missing   { background: var(--status-missing-bg);  color: var(--status-missing-text); }
+    .val-extra     { background: var(--status-extra-bg);    color: var(--status-extra-text); }
     .val-conflict  { background: var(--issue-conflict-bg);  color: var(--issue-conflict-text); }
     .val-duplicate { background: var(--issue-duplicate-bg); color: var(--issue-duplicate-text); }
     .none-text {
@@ -518,6 +556,7 @@ function Get-HtmlReport {
         <div class="stat-card s-match"   onclick="filterByCard('Match','')">   <div class="s-label">Match</div>     <div class="s-value">$countMatch</div></div>
         <div class="stat-card s-diff"    onclick="filterByCard('Diff','')">    <div class="s-label">Diff</div>      <div class="s-value">$countDiff</div></div>
         <div class="stat-card s-missing" onclick="filterByCard('Missing','')"> <div class="s-label">Missing</div>   <div class="s-value">$countMissing</div></div>
+        <div class="stat-card s-extra"   onclick="filterByCard('Extra','')">   <div class="s-label">Extra</div>     <div class="s-value">$countExtra</div></div>
         <div class="stat-card s-dup"     onclick="filterByCard('','Duplicate')"><div class="s-label">Duplicate</div> <div class="s-value">$countDuplicate</div></div>
         <div class="stat-card s-conflict" onclick="filterByCard('','Conflict')"><div class="s-label">Conflict</div> <div class="s-value">$countConflict</div></div>
     </div>
@@ -529,6 +568,7 @@ function Get-HtmlReport {
             <option value="Match">Match</option>
             <option value="Diff">Diff</option>
             <option value="Missing">Missing</option>
+            <option value="Extra">Extra</option>
         </select>
         <select id="filterIssue" onchange="applyFilters()">
             <option value="">All issues</option>
@@ -599,7 +639,8 @@ function Get-HtmlReport {
     const statusBadge = {
         Match:   '<span class="badge val-match">Match</span>',
         Diff:    '<span class="badge val-diff">Diff</span>',
-        Missing: '<span class="badge val-missing">Missing</span>'
+        Missing: '<span class="badge val-missing">Missing</span>',
+        Extra:   '<span class="badge val-extra">Extra</span>'
     };
     const issueBadge = {
         Conflict:  function(n) { return '<span class="badge val-conflict">Conflict (' + n + ')</span>'; },
@@ -736,7 +777,7 @@ function Get-HtmlReport {
             cls = 's-total';
         } else {
             var map = { 'Match':'s-match', 'Diff':'s-diff', 'Missing':'s-missing',
-                        'Duplicate':'s-dup', 'Conflict':'s-conflict' };
+                        'Extra':'s-extra', 'Duplicate':'s-dup', 'Conflict':'s-conflict' };
             cls = map[status || issue];
         }
 
@@ -751,10 +792,21 @@ function Get-HtmlReport {
         const issue  = document.getElementById('filterIssue').value;
         const policy = document.getElementById('filterPolicy').value;
 
+        // Extra rows have no policy of their own: search them on the names
+        // of the target policies that carry the setting.
+        function extraPolicyHit(r) {
+            if (r.status !== 'Extra' || !r.targets) return false;
+            for (var k = 0; k < r.targets.length; k++) {
+                if ((r.targets[k].name || '').toLowerCase().includes(search)) return true;
+            }
+            return false;
+        }
+
         filtered = ALL_DATA.filter(function(r) {
             return (!search || (r.policy  || '').toLowerCase().includes(search) ||
                                (r.setting || '').toLowerCase().includes(search) ||
-                               (r.value   || '').toLowerCase().includes(search))
+                               (r.value   || '').toLowerCase().includes(search) ||
+                               extraPolicyHit(r))
                 && (!status || r.status === status)
                 && (!issue  || r.issue  === issue)
                 && (!policy || r.policy === policy);
@@ -789,6 +841,8 @@ function Get-HtmlReport {
         filtered.sort((a, b) => {
             const ta = (a[key] ?? '').toLowerCase();
             const tb = (b[key] ?? '').toLowerCase();
+            // Policy: Extra rows (no policy) always at the bottom.
+            if (key === 'policy' && (ta === '') !== (tb === '')) return ta === '' ? 1 : -1;
             let c = ta.localeCompare(tb);
             // Issue: same type (Conflict / Duplicate) -> sort on the number
             // of target policies, so Conflict (2) comes before Conflict (8).
