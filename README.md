@@ -188,7 +188,7 @@ On top of that, it detects cross-policy issues within the target tenant:
 | File | Description |
 |---|---|
 | `diff.csv` | Full detail — one row per source setting × target policy match |
-| `report.html` | Visual overview — one row per unique setting with aggregated status |
+| `report.html` | Visual overview — aggregated status per source policy setting |
 | `summary.csv` | Per baseline policy: Total / Match / Missing / Diff counts + Compliance % |
 | `overlap.csv` | Only Duplicate and Conflict settings, with all involved target policies and values |
 
