@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Basetune - Baseline Comparison Report</title>
+<style>
+{{CSS}}
+</style>
+</head>
+<body{{BODY_CLASS}}>
+
+<button class="theme-toggle" id="theme-toggle" tabindex="-1" aria-label="Toggle Dark Mode">
+    <svg class="moon-icon" viewBox="0 0 20 20"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"/></svg>
+    <svg class="sun-icon" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.415 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" fill-rule="evenodd" clip-rule="evenodd"/></svg>
+</button>
+
+<div class="container">
+    <header>
+        <h1>Baseline Comparison Report</h1>
+        {{SUBTITLE}}
+    </header>
+
+    <div class="stats-grid">
+        <!-- Tab order: tiles (1-7), search (8), filters (9-12). The theme button
+             and the page buttons are mouse-only (tabindex -1). -->
+        <div tabindex="1" role="button" class="stat-card s-total"   onclick="filterByCard('','')">        <div class="s-label">Total</div>     <div class="s-value"></div></div>
+        <div tabindex="2" role="button" class="stat-card s-match"   onclick="filterByCard('Match','')">   <div class="s-label">Match</div>     <div class="s-value"></div></div>
+        <div tabindex="3" role="button" class="stat-card s-diff"    onclick="filterByCard('Diff','')">    <div class="s-label">Diff</div>      <div class="s-value"></div></div>
+        <div tabindex="4" role="button" class="stat-card s-missing" onclick="filterByCard('Missing','')"> <div class="s-label">Missing</div>   <div class="s-value"></div></div>
+        <div tabindex="5" role="button" class="stat-card s-extra"   onclick="filterByCard('Extra','')">   <div class="s-label">Extra</div>     <div class="s-value"></div></div>
+        <div tabindex="6" role="button" class="stat-card s-dup"     onclick="filterByCard('','Duplicate')"><div class="s-label">Duplicate</div> <div class="s-value"></div></div>
+        <div tabindex="7" role="button" class="stat-card s-conflict" onclick="filterByCard('','Conflict')"><div class="s-label">Conflict</div> <div class="s-value"></div></div>
+    </div>
+
+    <div class="filters">
+        <input type="text" id="search" tabindex="8" placeholder="Search setting or policy..." oninput="applyFilters()">
+        <select id="filterStatus" tabindex="9" onchange="applyFilters()">
+            <option value="">All statuses</option>
+            <option value="Match">Match</option>
+            <option value="Diff">Diff</option>
+            <option value="Missing">Missing</option>
+            <option value="Extra">Extra</option>
+        </select>
+        <select id="filterIssue" tabindex="10" onchange="applyFilters()">
+            <option value="">All issues</option>
+            <option value="None">None</option>
+            <option value="Duplicate">Duplicate</option>
+            <option value="Conflict">Conflict</option>
+        </select>
+        <!-- Platform: only the platforms in this compare. The tiles count for
+             the chosen platform; the Policy list shows its policies. -->
+        <select id="filterPlatform" tabindex="11" onchange="onPlatformChange()">
+            <option value="">All platforms</option>
+        </select>
+        <select id="filterPolicy" tabindex="12" onchange="applyFilters()">
+            <option value="">All policies</option>
+        </select>
+    </div>
+    <div class="row-count" id="rowCount"></div>
+
+    <div class="content-card">
+        <div class="table-wrapper">
+            <table id="mainTable">
+                <thead>
+                    <tr>
+                        <th onclick="sortTable(0)">Policy<span class="sort-indicator"></span></th>
+                        <th onclick="sortTable(1)">Setting<span class="sort-indicator"></span></th>
+                        <th onclick="sortTable(2)">Source Value<span class="sort-indicator"></span></th>
+                        <th class="col-status" onclick="sortTable(3)">Status<span class="sort-indicator"></span></th>
+                        <th class="col-issue"  onclick="sortTable(4)">Issue<span class="sort-indicator"></span></th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+        <div class="pagination" id="pagination"></div>
+    </div>
+
+    <footer>Basetune {{VERSION}} &nbsp;&middot;&nbsp; Built for the Intune community &nbsp;&middot;&nbsp; MIT License</footer>
+</div>
+
+<!-- Report rows (JSON), read by Report.js. < > & are written as \u escapes,
+     so no value can close this block. -->
+<script type="application/json" id="report-data">{{DATA}}</script>
+<script>
+{{JS}}
+</script>
+</body>
+</html>

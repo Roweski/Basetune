@@ -1,0 +1,101 @@
+<Window UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Setting Definitions"
+        SizeToContent="Height" Width="420"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" WindowStyle="None"
+        FontFamily="Segoe UI"
+        Background="{DynamicResource BgBrush}" Foreground="{DynamicResource TextBrush}"
+        ShowInTaskbar="False">
+    <!-- Styles and colours come from BasetuneTheme.xaml (application
+         resources, loaded by Load-Xaml). Light/dark switches live. -->
+
+    <!-- Own title bar + frame (WindowChrome), same as the main window: no
+         invisible Windows border, so a Dell Display Manager zone next to a
+         monitor with another scaling no longer makes the window bigger.
+         The size stays fixed: a zone only sets the position (see
+         Initialize-DialogChrome in BasetuneWpf.psm1). -->
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="32" ResizeBorderThickness="0" GlassFrameThickness="0"
+                      CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </WindowChrome.WindowChrome>
+
+    <Border BorderThickness="1" BorderBrush="{DynamicResource CardBorderBrush}">
+    <DockPanel>
+        <Grid DockPanel.Dock="Top" Height="32" Background="{DynamicResource BgBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Image x:Name="imgDlgIcon" Grid.Column="0" Width="16" Height="16" Margin="12,0,8,0"
+                   VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"/>
+            <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="12"
+                       Foreground="{DynamicResource SubTextBrush}"
+                       Text="{Binding Title, RelativeSource={RelativeSource AncestorType=Window}}"/>
+            <Button x:Name="btnDlgClose" Grid.Column="2" Style="{StaticResource CaptionCloseBtn}"
+                    Content="&#xE8BB;" ToolTip="Close"/>
+        </Grid>
+
+    <!-- Outer spacing as in the main window: 20 left/right, 16 under the
+         title bar and at the bottom. Card padding 15 at the top, so the first
+         field lines up with the tenant dropdown in the main window (main card:
+         padding 10 + label 16 + 10 = 36; here 15 + label 17 + 4 = 36). 18 at
+         the bottom, 12 between the field rows. The Tenant Configuration window
+         is then not higher than the main window at its minimum height (400). -->
+    <Grid Margin="20,16,20,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="12"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="20,15,20,18">
+            <StackPanel>
+                <!-- Label above the dropdown, same style as the Options window (FL). -->
+                <TextBlock Style="{StaticResource FL}" Text="Source Tenant"/>
+                <Grid>
+                    <ComboBox x:Name="cmbDownloadTenant"/>
+                    <!-- Placeholder until a tenant is picked (Download stays disabled until then) -->
+                    <TextBlock x:Name="cmbDownloadTenantHint" Style="{StaticResource HintText}"
+                               Margin="11,0,0,0" Text="Select a tenant"/>
+                </Grid>
+                <!-- Status of the definitions in use, under the dropdown (filled by
+                     Show-TenantPickerDialog): counts from the in-memory cache, date of
+                     the last download, "Never (using default)" when the shipped .default
+                     files are used, "Missing" without any file. -->
+                <Grid Margin="11,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" FontSize="13" Margin="0,0,12,2"
+                               Foreground="{DynamicResource SubTextBrush}" Text="Current definitions:"/>
+                    <TextBlock Grid.Row="0" Grid.Column="1" FontSize="13" Margin="0,0,0,2"
+                               x:Name="txtDlgDefCount" Text="-"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" FontSize="13" Margin="0,0,12,2"
+                               Foreground="{DynamicResource SubTextBrush}" Text="Current categories:"/>
+                    <TextBlock Grid.Row="1" Grid.Column="1" FontSize="13" Margin="0,0,0,2"
+                               x:Name="txtDlgCatCount" Text="-"/>
+                    <TextBlock Grid.Row="2" Grid.Column="0" FontSize="13" Margin="0,0,12,0"
+                               Foreground="{DynamicResource SubTextBrush}" Text="Last updated:"/>
+                    <TextBlock Grid.Row="2" Grid.Column="1" FontSize="13"
+                               x:Name="txtDlgLastUpdated" Text="Missing"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="btnDownloadOk" Content="Download" Padding="16,0" Height="32"
+                    Style="{StaticResource PrimaryBtn}" Margin="0,0,12,0"/>
+            <Button x:Name="btnDownloadCancel" Content="Close" Padding="16,0" Height="32"
+                    Style="{StaticResource SecBtn}"/>
+        </StackPanel>
+    </Grid>
+    </DockPanel>
+    </Border>
+</Window>
