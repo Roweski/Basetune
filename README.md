@@ -11,9 +11,11 @@ Comparison capabilities:
 - **Unlimited tenant configuration** — Configure as many tenants and baselines as you need, then pick which two to compare at runtime.
 - **Platform aware** — Only policies for the selected platforms (Windows, macOS, iOS/iPadOS, Android, Linux) are loaded and compared.
 
+<br>
+<br>
 
 ![Basetune Report](docs/Main.png)
-<br>
+
 
 <br>
 
@@ -83,7 +85,7 @@ On top of that, it detects cross-policy issues within the target tenant:
 
 ## Comparison edge cases
 
-Below are a number of non-trivial cases that the tool handles correctly.
+Below are a some of the cases that the tool handles correctly.
 
 ### Implicit parent levels in the breadcrumb path
 
@@ -127,6 +129,8 @@ Basetune uses the **OAuth 2.0 client credentials flow** with a **client secret**
 
 - **Client secret:** stored encrypted (Windows DPAPI) in `Config.json`. It only works for the same Windows user on the same PC.
 - **Certificate:** `Config.json` only holds the thumbprint. The certificate with private key must be in `Cert:\CurrentUser\My` or `Cert:\LocalMachine\My`.
+
+<br>
 
 ## Secret storage
 
