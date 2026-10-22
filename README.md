@@ -85,7 +85,7 @@ On top of that, it detects cross-policy issues within the target tenant:
 
 ## Comparison edge cases
 
-Below are a some of the cases that the tool handles correctly.
+Below are some of the cases that the tool handles correctly.
 
 ### Implicit parent levels in the breadcrumb path
 
