@@ -53,7 +53,7 @@ Additional categories are saved to `categories.json`. A setting without a defini
 
 ## Report and Output
 
-For each comparison, the report identifies one of four outcomes::
+For each comparison, the report identifies one of four outcomes:
 
 - **Match** — the setting is present in the target with the same value
 - **Diff** — the setting is present in the target, but its value differs
@@ -67,16 +67,18 @@ On top of that, it detects cross-policy issues within the target tenant:
 
 <br>
 
+The HTML report is interactive: a single file that works offline in any browser:
+
 ![Basetune Report](docs/Report.png)
 
 <br>
 
+Each comparison generates the following files:
 
-| File | Description |
-|---|---|
-| `Report.html` | Visual overview — one row per unique setting with aggregated status |
-| `Diff.csv` | Full detail — one row per source setting × target policy match |
-| `Summary.csv` | Per baseline policy: Total / Match / Missing / Diff counts + Compliance % |
+- **Report.html** — Visual overview, one row per unique setting with aggregated status
+- **Diff.csv** — Full detail, one row per source setting × target policy match
+- **Summary.csv** — The compliance per source policy
+- **compare.log** — Compared policies, duplicate policy names or IDs and skipped settings
 
 <br>
 
