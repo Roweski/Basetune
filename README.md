@@ -21,7 +21,7 @@ Comparison capabilities:
 
 - Windows with PowerShell 7+
 - For an API tenant: a Microsoft Entra app registration with the **DeviceManagementConfiguration.Read.All** application permission for Microsoft Graph.
-  > An administrator mustgrant tenant-wide admin consent for this permission.
+  > An administrator must grant tenant-wide admin consent for this permission.
 - For a JSON tenant: a folder with exported policy files in JSON format.
   > Each file must contain `id`, `name`, `platforms` and a `settings` array. `templateReference` is optional. Files without a required field are skipped and listed in the log.
 
