@@ -3,10 +3,10 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 ## What it does
+Basetune is a PowerShell-based tool to compare **Intune Settings Catalog** and **Security Baseline** policies between online tenants (Microsoft Graph API) and exported baselines (JSON files).
 
 ![Basetune UI](docs/Main.png)
 
-Basetune is a PowerShell-based tool to compare **Intune Settings Catalog** and **Security Baseline** policies between online tenants (Microsoft Graph API) and exported baselines (JSON files).
 
 Comparison capabilities:
 - **Source vs. Target** — Each run compares one source against one target. Source and target can be any combination of online tenants and offline baselines.
@@ -53,8 +53,6 @@ Additional categories are saved to `categories.json`. A setting without a defini
 
 ## Report and Output
 
-![Basetune Report](docs/Report.png)
-
 For each comparison, the report identifies one of four outcomes::
 
 - **Match** — the setting is present in the target with the same value
@@ -66,6 +64,8 @@ On top of that, it detects cross-policy issues within the target tenant:
 
 - **Duplicate** — the setting appears in multiple target policies with the same value
 - **Conflict** — the setting appears in multiple target policies with different values
+
+![Basetune Report](docs/Report.png)
 
 <br>
 
