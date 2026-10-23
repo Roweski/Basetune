@@ -65,9 +65,12 @@ On top of that, it detects cross-policy issues within the target tenant:
 - **Duplicate** — the setting appears in multiple target policies with the same value
 - **Conflict** — the setting appears in multiple target policies with different values
 
+<br>
+
 ![Basetune Report](docs/Report.png)
 
 <br>
+
 
 | File | Description |
 |---|---|
