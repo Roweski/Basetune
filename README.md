@@ -4,6 +4,8 @@
 
 ## What it does
 
+![Basetune UI](docs/Main.png)
+
 Basetune is a PowerShell-based tool to compare **Intune Settings Catalog** and **Security Baseline** policies between online tenants (Microsoft Graph API) and exported baselines (JSON files).
 
 Comparison capabilities:
@@ -11,20 +13,12 @@ Comparison capabilities:
 - **Unlimited tenant configuration** — Configure as many tenants and baselines as you need, then pick which two to compare at runtime.
 - **Platform aware** — Only policies for the selected platforms (Windows, macOS, iOS/iPadOS, Android, Linux) are loaded and compared.
 
-<br>
-<br>
-
-![Basetune Report](docs/Main.png)
-
-
-<br>
-
 
 ## Requirements
 
 - Windows with PowerShell 7+
 - For an API tenant: a Microsoft Entra app registration with the **DeviceManagementConfiguration.Read.All** application permission for Microsoft Graph.
-  > An administrator must grant tenant-wide admin consent for this permission.
+  > An administrator mustgrant tenant-wide admin consent for this permission.
 - For a JSON tenant: a folder with exported policy files in JSON format.
   > Each file must contain `id`, `name`, `platforms` and a `settings` array. `templateReference` is optional. Files without a required field are skipped and listed in the log.
 
