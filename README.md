@@ -45,11 +45,11 @@ pwsh.exe .\BasetuneUI.ps1
 ## Resolve Display Names and Categories
 
 Intune policies contain raw IDs instead of readable names. Basetune resolves them with lightweight definition files that keep only the properties it needs, so they load fast. 
-Missing categories are retrieved from the Graph API during a compare when at least one API tenant is selected. 
 
 > Basetune includes a `Definitions\settings.default.json` and `Definitions\categories.default.json` file which can become outdated over time. Refresh them with **Download** in the UI or `-Download` in the CLI (needs an API tenant). A download writes `settings.json` and `categories.json`, which are used instead of the `.default` files.
 
-Additional categories are saved to `categories.json`. A setting without a definition is still compared, but shown with its raw ID.
+Missing categories are retrieved from MS Graph during a compare when at least one API tenant is selected, and added to `categories.json`.
+A setting without a definition is still compared, but shown with its raw ID.
 
 
 <br>
