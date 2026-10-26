@@ -11,26 +11,12 @@
 $script:UI       = (Get-BasetuneContext).UI
 $script:AppState = (Get-BasetuneContext).State
 
-# ── Log helpers ───────────────────────────────────────────────────────────────
-# UI status messages are mirrored to the log file so the on-disk log is a
-# complete record of what the user saw. Best-effort: file write never throws.
-function script:Add-UILogFileLine {
-    param([string]$msg)
-    if (-not $AppState.logFile -or -not $msg) { return }
-    # Skip pure whitespace/newline-only entries (Write-UILog "`n" etc.)
-    if ($msg.Trim().Length -eq 0) { return }
-    # CMTrace format, same as Write-Log (ConvertTo-CMTraceLine in BasetuneHelpers).
-    foreach ($line in ($msg -split "`r?`n")) {
-        if ($line.Trim().Length -eq 0) { continue }
-        Add-LogFileLine -Path $AppState.logFile -Line $line
-    }
-}
-
 # ── Log view (RichTextBox) ───────────────────────────────────────────────────
 # One Paragraph per line, so a single line can be coloured. Lines come in as
-# "[LEVEL][Label] message" (Write-Log format; the log file keeps level and
-# label). The view shows only the message; ERROR lines use ErrorBrush (follows
-# the theme). Messages that need the side say it ("Loading source policies").
+# log entries (New-LogEntry: Level, Label, Message); the log file keeps the
+# label. The view shows only the message; ERROR lines use ErrorBrush, WARN
+# lines WarnBrush (both follow the theme). Messages that need the side say
+# it ("Loading source policies").
 $script:UILogMaxLines = 5000
 
 # Local paths in a line (C:\...\Report.html, a folder) become links: a click
@@ -78,10 +64,10 @@ function script:New-UILogLink {
             }
             if ($denied) {
                 $what = if (Test-UILogIsFile $path) { 'file' } else { 'folder' }
-                Write-UILog "[WARN][Basetune] Could not open the $what. See the log file for details"
+                Write-UILog 'Basetune' "Could not open the $what. See the log file for details" 'WARN'
                 Write-Log 'Basetune' "Details: no access to '$path'" 'WARN' -FileOnly
             } else {
-                Write-UILog "[WARN][Basetune] Path not found: $path"
+                Write-UILog 'Basetune' "Path not found: $path" 'WARN'
             }
             return
         }
@@ -105,10 +91,11 @@ function script:New-UILogParagraph {
 }
 
 # "See the log file" becomes a link that opens Basetune.log (other wording:
-# just "the log file"). "See compare.log" (unknown setting types, duplicate
-# policies) links to compare.log in the folder of the running compare
-# (written by Invoke-BaselineCompare, next to the report).
-$script:UILogFileRegex = [regex]'(?<log>See the log file|the log file)|(?<cmp>See compare\.log)'
+# just "the log file"). "See compare.log for details" (the warnings at the
+# end of a compare) is a link as a whole to compare.log in the folder of the
+# running compare (written by Invoke-BaselineCompare, next to the report);
+# without "for details" just "See compare.log".
+$script:UILogFileRegex = [regex]'(?<log>See the log file|the log file)|(?<cmp>See compare\.log(?: for details)?)'
 
 function script:Add-UILogText {
     param([System.Windows.Documents.Paragraph]$Paragraph, [string]$Text, [switch]$NoLinks)
@@ -196,132 +183,141 @@ function script:Start-UILogAnim {
     $script:UILogAnimTimer.Start()
 }
 
+# Adds log entries (New-LogEntry) to the view: one entry, or a batch drained
+# from a runspace queue. View only: Write-UILog / Write-Log write the file.
 function Add-UILogLines {
-    param([string]$Text)
-    if (-not $Text -or -not $UI.txtLog) { return }
+    param([object[]]$Entries)
+    if (-not $Entries -or -not $UI.txtLog) { return }
     $doc = $UI.txtLog.Document
-    foreach ($line in ($Text -split "`r?`n")) {
-        if ($line.Trim().Length -eq 0) { continue }
-        $level = $null
-        $shown = $line
-        if ($line -match '^\[(INFO|OK|WARN|ERROR)\]\[[^\]]*\]\s?(.*)$') {
-            $level = $Matches[1]
-            $shown = $Matches[2]
-        }
-        # Log file only: the JSON folder of a load ("Using path: ...").
-        if ($level -ne 'ERROR' -and $shown -match '^Using path: ') { continue }
+    foreach ($entry in $Entries) {
+        if (-not $entry -or -not $entry.Message) { continue }
+        $level = $entry.Level
+        # A message with line breaks: a paragraph per line, all with the
+        # entry's level. Most have none (the -split regex is skipped then).
+        $msgLines = if ($entry.Message.Contains("`n")) { $entry.Message -split "`r?`n" } else { $entry.Message }
+        foreach ($shown in $msgLines) {
+            if ($shown.Trim().Length -eq 0) { continue }
+            # Log file only: the JSON folder of a load ("Using path: ...").
+            if ($level -ne 'ERROR' -and $shown -match '^Using path: ') { continue }
 
-        # Selection changed during the compare: the note goes right after the
-        # "Resolving display names ..." line (if no line follows it, it is
-        # written when the compare ends).
-        if ($AppState.compareSelectionNotePending -and $script:UILogLastLineResolving) {
-            $AppState.compareSelectionNotePending = $false
-            Write-UILog '[INFO][Compare] Policy selection changed. Disabling report and details buttons'
-        }
-        $script:UILogLastLineResolving = ($shown -match '^(Resolving|Skipping) display names')
-
-        # A new line ends the dots of the previous busy line. Only called when
-        # a line is busy: a call per line adds up over 1000+ "Loaded policy" lines.
-        if ($script:UILogAnimRun) { Stop-UILogAnim }
-
-        # Compare output in the order Invoke-BaselineCompare logs it (-> as shown):
-        #   Comparison complete: 958 rows processed            (as it is)
-        #   Report folder: C:\reports\Src_Tgt\20261010_113304   (link, relative)
-        #   Exporting CSV reports...
-        #   Created <path>\Diff.csv (958 rows)                  -> Created Diff.csv (958 rows)
-        #   Created <path>\Summary.csv                          -> Created Summary.csv
-        #   Exporting HTML report...
-        #   Created <path>\Report.html (522 settings)           -> Created Report.html (522 settings)
-        # The "Report folder" line sets the folder, so the "Created" lines show
-        # only the file name as a link (general path handling below).
-        # No counts per status here: the report counts per setting, which
-        # differs from the rows in Diff.csv.
-        if ($level -ne 'ERROR' -and $shown -match '^Report folder: (?<p>[A-Za-z]:\\.+)$') {
-            $dir = $Matches['p'].TrimEnd('\')
-            $script:UILogLastDir = $dir
-            $up = New-UILogParagraph
-            $up.Inlines.Add([System.Windows.Documents.Run]::new('Report folder: '))
-            # Shown relative (Src_Tgt\yyyyMMdd_HHmmss); link and tooltip keep
-            # the full path.
-            $dirShown = $dir
-            $base = if ($AppState.reportBasePath) { $AppState.reportBasePath.TrimEnd('\') + '\' } else { $null }
-            if ($base -and $dir.Length -gt $base.Length -and $dir.StartsWith($base, [System.StringComparison]::OrdinalIgnoreCase)) {
-                $dirShown = $dir.Substring($base.Length)
+            # Selection changed during the compare: the note goes right after the
+            # "Resolving display names ..." line (if no line follows it, it is
+            # written when the compare ends).
+            if ($AppState.compareSelectionNotePending -and $script:UILogLastLineResolving) {
+                $AppState.compareSelectionNotePending = $false
+                Write-UILog 'Compare' 'Policy selection changed. Disabling report and details buttons'
             }
-            $up.Inlines.Add((New-UILogLink -Path $dir -Display $dirShown))
-            $doc.Blocks.Add($up)
-            continue
-        }
+            $script:UILogLastLineResolving = ($shown -match '^(Resolving|Skipping) display names')
 
-        # Lines about Config.json (e.g. "Report path in Config.json normalized:
-        # 'C:\Reports\' -> 'C:\Reports'.") describe its contents: plain text,
-        # no path links, no folder bookkeeping.
-        if ($shown -match 'Config\.json') {
-            # View only: the default report folder in the missing / invalid
-            # report path messages is shown as .\Reports.
-            if ($shown -match '^(Config\.json is missing report path setting|Invalid report path .+ in Config\.json)\. Set to default \(' -and $AppState.ScriptRoot) {
-                $rootRx = [regex]::Escape('Set to default (' + $AppState.ScriptRoot.TrimEnd('\') + '\')
-                $shown  = [regex]::Replace($shown, $rootRx, 'Set to default (.\', 'IgnoreCase')
+            # A new line ends the dots of the previous busy line. Only called when
+            # a line is busy: a call per line adds up over 1000+ "Loaded policy" lines.
+            if ($script:UILogAnimRun) { Stop-UILogAnim }
+
+            # Compare output in the order Invoke-BaselineCompare logs it (-> as shown):
+            #   Comparison complete: 958 rows processed            (as it is)
+            #   Report folder: C:\reports\Src_Tgt\20261010_113304   (link, relative)
+            #   Exporting CSV reports...
+            #   Created <path>\Diff.csv (958 rows)                  -> Created Diff.csv (958 rows)
+            #   Created <path>\Summary.csv                          -> Created Summary.csv
+            #   Exporting HTML report...
+            #   Created <path>\Report.html (522 settings)           -> Created Report.html (522 settings)
+            # The "Report folder" line sets the folder, so the "Created" lines show
+            # only the file name as a link (general path handling below).
+            # No counts per status here: the report counts per setting, which
+            # differs from the rows in Diff.csv.
+            if ($level -ne 'ERROR' -and $shown -match '^Report folder: (?<p>[A-Za-z]:\\.+)$') {
+                $dir = $Matches['p'].TrimEnd('\')
+                $script:UILogLastDir = $dir
+                $up = New-UILogParagraph
+                $up.Inlines.Add([System.Windows.Documents.Run]::new('Report folder: '))
+                # Shown relative (Src_Tgt\yyyyMMdd_HHmmss); link and tooltip keep
+                # the full path.
+                $dirShown = $dir
+                $base = if ($AppState.reportBasePath) { $AppState.reportBasePath.TrimEnd('\') + '\' } else { $null }
+                if ($base -and $dir.Length -gt $base.Length -and $dir.StartsWith($base, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $dirShown = $dir.Substring($base.Length)
+                }
+                $up.Inlines.Add((New-UILogLink -Path $dir -Display $dirShown))
+                $doc.Blocks.Add($up)
+                continue
             }
-            $p = New-UILogParagraph
-            # No path links here, but "the log file" stays a link.
-            Add-UILogText -Paragraph $p -Text $shown
-            if ($level -eq 'ERROR') {
-                $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'ErrorBrush')
+
+            # Lines about Config.json (e.g. "Report path in Config.json normalized:
+            # 'C:\Reports\' -> 'C:\Reports'.") describe its contents: plain text,
+            # no path links, no folder bookkeeping.
+            if ($shown -match 'Config\.json') {
+                # View only: the default report folder in the missing / invalid
+                # report path messages is shown as .\Reports.
+                if ($shown -match '^(Config\.json is missing report path setting|Invalid report path .+ in Config\.json)\. Set to default \(' -and $AppState.ScriptRoot) {
+                    $rootRx = [regex]::Escape('Set to default (' + $AppState.ScriptRoot.TrimEnd('\') + '\')
+                    $shown  = [regex]::Replace($shown, $rootRx, 'Set to default (.\', 'IgnoreCase')
+                }
+                $p = New-UILogParagraph
+                # No path links here, but "the log file" stays a link.
+                Add-UILogText -Paragraph $p -Text $shown
+                if ($level -eq 'ERROR') {
+                    $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'ErrorBrush')
+                } elseif ($level -eq 'WARN') {
+                    $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'WarnBrush')
+                }
+                $doc.Blocks.Add($p)
+                continue
             }
-            $doc.Blocks.Add($p)
-            continue
-        }
 
-        # Most lines ("Loaded policy: ...", 1000+ in a large load) hold no path
-        # and no link text. The regex calls below (.NET calls, slow per line)
-        # only run when the line can match: a path needs "X:\", a link "the log
-        # file" / "See compare.log" (checked case-insensitively here, so nothing
-        # the case-sensitive link regex matches is skipped).
-        $hasPath = $shown -match '[A-Za-z]:\\'
-        $plain   = $shown -and -not $hasPath -and $shown -notmatch 'the log file|See compare\.log'
+            # Most lines ("Loaded policy: ...", 1000+ in a large load) hold no path
+            # and no link text. The regex calls below (.NET calls, slow per line)
+            # only run when the line can match: a path needs "X:\", a link "the log
+            # file" / "See compare.log" (checked case-insensitively here, so nothing
+            # the case-sensitive link regex matches is skipped).
+            $hasPath = $shown -match '[A-Za-z]:\\'
+            $plain   = $shown -and -not $hasPath -and $shown -notmatch 'the log file|See compare\.log'
 
-        # Folder bookkeeping for the short file names (see above).
-        $first = if ($hasPath) { $script:UILogPathRegex.Match($shown) } else { $null }
-        if ($first -and $first.Success -and $first.Length -ge 4) {
-            if (-not (Test-UILogIsFile $first.Value)) {
-                # A folder line ("Using path: C:\...\EXPORT"): remember it.
-                $script:UILogLastDir = $first.Value.TrimEnd('\')
-            } else {
-                $dir = Get-UILogFolder $first.Value
-                if ($dir -and $dir -ne $script:UILogLastDir) {
-                    $script:UILogLastDir = $dir
-                    $up = New-UILogParagraph
-                    # Other files (e.g. downloaded definitions); the compare
-                    # has its own "Report folder" line.
-                    $up.Inlines.Add([System.Windows.Documents.Run]::new('Using path: '))
-                    $up.Inlines.Add((New-UILogLink -Path $dir -Display $dir))
-                    $doc.Blocks.Add($up)
+            # Folder bookkeeping for the short file names (see above).
+            $first = if ($hasPath) { $script:UILogPathRegex.Match($shown) } else { $null }
+            if ($first -and $first.Success -and $first.Length -ge 4) {
+                if (-not (Test-UILogIsFile $first.Value)) {
+                    # A folder line ("Using path: C:\...\EXPORT"): remember it.
+                    $script:UILogLastDir = $first.Value.TrimEnd('\')
+                } else {
+                    $dir = Get-UILogFolder $first.Value
+                    if ($dir -and $dir -ne $script:UILogLastDir) {
+                        $script:UILogLastDir = $dir
+                        $up = New-UILogParagraph
+                        # Other files (e.g. downloaded definitions); the compare
+                        # has its own "Report folder" line.
+                        $up.Inlines.Add([System.Windows.Documents.Run]::new('Using path: '))
+                        $up.Inlines.Add((New-UILogLink -Path $dir -Display $dir))
+                        $doc.Blocks.Add($up)
+                    }
                 }
             }
-        }
 
-        # New-UILogParagraph inline: a function call per line costs about as
-        # much as the WPF work of the line itself.
-        $p = [System.Windows.Documents.Paragraph]::new()
-        $p.Margin = $script:UILogZeroMargin
-        # Downloaded definition files: name only, no link (their "Using path:"
-        # folder line stays a link).
-        $noLinks = ($shown -match '^Saved (definitions|categories) to ')
-        if ($plain) {
-            # The whole line as one Run, as Add-UILogInlines would give it.
-            $p.Inlines.Add([System.Windows.Documents.Run]::new($shown))
-        } else {
-            Add-UILogInlines -Paragraph $p -Text $shown -NoLinks:$noLinks
-        }
-        if ($level -eq 'ERROR') {
-            $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'ErrorBrush')
-        }
-        $doc.Blocks.Add($p)
-        # Busy line: animate its dots. The regex only runs on lines ending in "...".
-        $am = if ($shown -like '*...') { $script:UILogAnimRegex.Match($shown) } else { $null }
-        if ($am -and $am.Success -and $level -ne 'ERROR' -and $p.Inlines.FirstInline -is [System.Windows.Documents.Run]) {
-            Start-UILogAnim -Run $p.Inlines.FirstInline -Base $am.Groups['base'].Value
+            # New-UILogParagraph inline: a function call per line costs about as
+            # much as the WPF work of the line itself.
+            $p = [System.Windows.Documents.Paragraph]::new()
+            $p.Margin = $script:UILogZeroMargin
+            # Downloaded definition files: name only, no link (their "Using path:"
+            # folder line stays a link).
+            $noLinks = ($shown -match '^Saved (definitions|categories) to ')
+            if ($plain) {
+                # The whole line as one Run, as Add-UILogInlines would give it.
+                $p.Inlines.Add([System.Windows.Documents.Run]::new($shown))
+            } else {
+                Add-UILogInlines -Paragraph $p -Text $shown -NoLinks:$noLinks
+            }
+            # ERROR lines red, WARN lines orange (WarnBrush, darker in the light
+            # theme). Links keep their own colour (New-UILogLink: AccentBrush).
+            if ($level -eq 'ERROR') {
+                $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'ErrorBrush')
+            } elseif ($level -eq 'WARN') {
+                $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'WarnBrush')
+            }
+            $doc.Blocks.Add($p)
+            # Busy line: animate its dots. The regex only runs on lines ending in "...".
+            $am = if ($shown -like '*...') { $script:UILogAnimRegex.Match($shown) } else { $null }
+            if ($am -and $am.Success -and $level -ne 'ERROR' -and $p.Inlines.FirstInline -is [System.Windows.Documents.Run]) {
+                Start-UILogAnim -Run $p.Inlines.FirstInline -Base $am.Groups['base'].Value
+            }
         }
     }
     # Rolling window: keep the view responsive in long sessions.
@@ -337,19 +333,21 @@ function Clear-UILogView {
     $script:UILogLastDir = $null
 }
 
+# A line in the log view and the log file (the file is a complete record of
+# what the user saw). Same parameters as Write-Log; on the UI thread the two
+# give the same result.
 function Write-UILog {
-    param([string]$msg)
-    Add-UILogLines $msg
-    Add-UILogFileLine $msg
+    param([string]$Label, [string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO')
+    $entry = New-LogEntry $Label $Message $Level
+    Add-UILogLines $entry
+    if ($AppState.logFile) { Add-LogFileLine -Path $AppState.logFile -Entry $entry }
 }
 
+# Clears the log view; with a message, that becomes its first line.
 function Clear-UILog {
-    param([string]$msg = '')
+    param([string]$Label, [string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO')
     Clear-UILogView
-    if ($msg) {
-        Add-UILogLines $msg
-        Add-UILogFileLine $msg
-    }
+    if ($Message) { Write-UILog $Label $Message $Level }
 }
 
 Export-ModuleMember -Function @(

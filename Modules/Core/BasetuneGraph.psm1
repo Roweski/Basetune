@@ -201,7 +201,7 @@ function New-GraphConnection {
 
     $expiresIn = if ($token.PSObject.Properties['expires_in'] -and $token.expires_in) { [int]$token.expires_in } else { 3600 }
     $expiresAt = Get-TokenExpiry $expiresIn
-    Write-Log $Label "Signed in successfully. Access valid until $($expiresAt.ToString('HH:mm:ss'))" "OK"
+    Write-Log $Label "Signed in successfully. Access valid until $($expiresAt.ToString('HH:mm:ss'))"
 
     [PSCustomObject]@{
         Label       = $Label
@@ -474,7 +474,7 @@ function Get-GraphPagedResults {
         if (-not $Quiet -and $next) { Write-Log $conn.Label "Fetching... ($($results.Count) items so far)" }
     }
 
-    if (-not $Quiet) { Write-Log $conn.Label "Fetched items ($($results.Count))" "OK" }
+    if (-not $Quiet) { Write-Log $conn.Label "Fetched items ($($results.Count))" }
     return $results
 }
 

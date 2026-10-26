@@ -8,7 +8,7 @@
 
 # Controls of the main and config window, by x:Name (BasetuneState.psm1).
 $script:UI = (Get-BasetuneContext).UI
-# Paths, config, tenants and form state (initialised in BasetuneUI.ps1).
+# Paths, config, tenants and form state (initialised in Basetune.ps1).
 $script:AppState = (Get-BasetuneContext).State
 
 # ── Helpers: dropdown population ─────────────────────────────────────────────

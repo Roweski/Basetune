@@ -127,7 +127,7 @@ function Export-PoliciesToJson {
         return
     }
 
-    Write-Log "Export" "Found policies ($($selected.Count), filter: '$Filter')" "OK"
+    Write-Log "Export" "Found policies ($($selected.Count), filter: '$Filter')"
 
     # File names decided up front over the whole selection (Get-ExportFileNames).
     $fileNames = Get-ExportFileNames -Policies @($selected | ForEach-Object { [PSCustomObject]@{ Name = $_.name; Id = $_.id } })
@@ -244,7 +244,7 @@ function Export-PoliciesToJson {
         $result = $_
         switch ($result.Status) {
             'Written' {
-                Write-Log "Export" "Saved: $($result.File)" "OK"
+                Write-Log "Export" "Saved: $($result.File)"
                 $written++
             }
             'Skipped' {
@@ -259,7 +259,7 @@ function Export-PoliciesToJson {
         }
     }
 
-    $level = if ($failed -gt 0) { "WARN" } else { "OK" }
+    $level = if ($failed -gt 0) { "WARN" } else { "INFO" }
     Write-Log "Export" "Export folder: $OutputPath" "INFO"
     Write-Log "Export" "Export completed. $written written, $skipped skipped, $failed failed" $level
     return [PSCustomObject]@{ Written = $written; Skipped = $skipped; Failed = $failed }
@@ -323,7 +323,7 @@ function Export-CachedPoliciesToJson {
         return
     }
 
-    Write-Log "Export" "Selected policies for export ($($toExport.Count))" "OK"
+    Write-Log "Export" "Selected policies for export ($($toExport.Count))"
 
     $written = 0
     $skipped = 0
@@ -362,7 +362,7 @@ function Export-CachedPoliciesToJson {
             $filePath = Join-Path $OutputPath $fileName
             $payload | ConvertTo-Json -Depth 50 | Out-File -LiteralPath $filePath -Encoding UTF8
 
-            Write-Log "Export" "Saved: $fileName" "OK"
+            Write-Log "Export" "Saved: $fileName"
             $written++
         }
         catch {
@@ -372,7 +372,7 @@ function Export-CachedPoliciesToJson {
         }
     }
 
-    $level = if ($failed -gt 0) { "WARN" } else { "OK" }
+    $level = if ($failed -gt 0) { "WARN" } else { "INFO" }
     Write-Log "Export" "Export folder: $OutputPath" "INFO"
     Write-Log "Export" "Export completed. $written written, $skipped skipped, $failed failed" $level
     return [PSCustomObject]@{ Written = $written; Skipped = $skipped; Failed = $failed }

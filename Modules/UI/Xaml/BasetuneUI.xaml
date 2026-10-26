@@ -99,7 +99,7 @@
                         <!-- Same chevron as the dropdown arrow of the tenant lists
                              (ComboToggleTemplate): 8x4, stroke 1.5, round caps.
                              Turns 180 degrees on collapse/expand (animated in
-                             BasetuneUI.ps1, 0.4 s). -->
+                             Basetune.ps1, 0.4 s). -->
                         <Path x:Name="pathToggleLog" HorizontalAlignment="Center" VerticalAlignment="Center"
                               Data="M0,0 L4,4 L8,0" RenderTransformOrigin="0.5,0.5"
                               Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
@@ -438,7 +438,7 @@
                                     <CheckBox x:Name="chkSourceAll" TabIndex="9" Grid.Column="0" VerticalAlignment="Center" Padding="0"
                                               FocusVisualStyle="{x:Null}" ToolTip="Select or deselect all policies in the list"/>
                                     <Button x:Name="btnSourceSortName" Grid.Column="1" Style="{StaticResource ColumnHeaderBtn}"
-                                            Margin="8,0,0,0" HorizontalAlignment="Left" Content="POLICY"
+                                            Margin="8,0,0,0" HorizontalAlignment="Stretch" Content="POLICY"
                                             ToolTip="Sort by policy name"/>
                                     <!-- Rows: Type 100 wide, Platform 69 (just wide enough, so both sit close to
                                          the right edge). Type header = 100 + 12 (row margin) = 112, Platform header
@@ -599,7 +599,7 @@
                                     <CheckBox x:Name="chkTargetAll" TabIndex="11" Grid.Column="0" VerticalAlignment="Center" Padding="0"
                                               FocusVisualStyle="{x:Null}" ToolTip="Select or deselect all policies in the list"/>
                                     <Button x:Name="btnTargetSortName" Grid.Column="1" Style="{StaticResource ColumnHeaderBtn}"
-                                            Margin="8,0,0,0" HorizontalAlignment="Left" Content="POLICY"
+                                            Margin="8,0,0,0" HorizontalAlignment="Stretch" Content="POLICY"
                                             ToolTip="Sort by policy name"/>
                                     <!-- Rows: Type 100 wide, Platform 69 (just wide enough, so both sit close to
                                          the right edge). Type header = 100 + 12 (row margin) = 112, Platform header

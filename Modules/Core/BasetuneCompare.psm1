@@ -6,8 +6,10 @@
 #
 # Platform aware: a setting only matches a setting of the same platform
 # (~1,100 definitions exist on several platforms: Edge on Windows and macOS,
-# Apple payloads on iOS and macOS, ...). Unknown platform ('', JSON exports
-# without "platforms") matches any platform.
+# Apple payloads on iOS and macOS, ...). Every compared policy has a known
+# platform: a policy or JSON file without one is skipped when loading
+# (Get-PolicyLoadProblem, Test-PolicyPlatform). The checks below still let an
+# empty platform match any platform, only as a safety net.
 #
 # Result Status values:
 #   Match   — DefinitionId found in target and RawValue is identical
@@ -40,7 +42,7 @@ function Compare-RawSettings {
         else                 { $targetIndex[$key] = $list + $t }
     }
 
-    # DefinitionId -> platforms of its source settings ('' = unknown), for the
+    # DefinitionId -> platforms of its source settings, for the
     # Extra check below: a case-sensitive Dictionary (platform -> $true), set
     # by index to avoid a method call per source setting.
     $sourcePlatforms = @{}
@@ -58,8 +60,8 @@ function Compare-RawSettings {
         }
         $sp[$sPlat] = $true
 
-        # Same platform, or unknown ('') on either side. Inline: a function
-        # call per candidate is costly on a large set.
+        # Same platform (an empty one would match any, see the top). Inline: a
+        # function call per candidate is costly on a large set.
         $matched = @(foreach ($t in @($targetIndex[$key])) {
             if (-not $t) { continue }
             $tPlat = [string]$t.Platform
@@ -103,8 +105,7 @@ function Compare-RawSettings {
         }
     }
 
-    # Extra: no source setting with the same DefinitionId on the same platform
-    # (or with an unknown platform on either side).
+    # Extra: no source setting with the same DefinitionId on the same platform.
     $extra = foreach ($t in $Target) {
         if (-not $t.DefinitionId) { continue }
         $tPlat = [string]$t.Platform
@@ -316,7 +317,7 @@ function Invoke-BaselineCompare {
     )
 
     $SourcePolicies = @($SourcePolicies | Where-Object { $_ })
-    $unresolvedCount = 0   # settings without a definition (only counted when definitions are loaded)
+    $unresolved = @()   # settings without a definition (only when definitions are loaded)
     $TargetPolicies = @($TargetPolicies | Where-Object { $_ })
 
     if ($SourcePolicies.Count -eq 0) {
@@ -391,7 +392,7 @@ function Invoke-BaselineCompare {
         }
         $resolved = @(Resolve-DiffSettings -Diff $diff)
         $resolved = @(Merge-EnabledWithChildren -Resolved $resolved)
-        $unresolvedCount = Get-UnresolvedDefinitionCount -Diff $diff
+        $unresolved = @(Get-UnresolvedDefinitions -Diff $diff)
     } else {
         Write-Log "Compare" "Skipping display names and categories..." "INFO"
         $resolved = @($diff | ForEach-Object {
@@ -437,9 +438,9 @@ function Invoke-BaselineCompare {
                 -not $_.PSObject.Properties['__placeholder'] -and $_.displayName -notin @('[Unresolved Category]','[Unknown Category]')
             })
             $tmp    = "$($rc.CategoriesFilePath).tmp"
-            $toSave | ConvertTo-Json -Depth 10 | Out-File -LiteralPath $tmp -Encoding UTF8
+            @(foreach ($c in $toSave) { ConvertTo-SlimSettingCategory -Category $c }) | ConvertTo-Json -Depth 10 | Out-File -LiteralPath $tmp -Encoding UTF8
             Move-Item -LiteralPath $tmp -Destination $rc.CategoriesFilePath -Force
-            Write-Log "Categories" "Saved $($rc.CategoryFetchedCount) extra categories to $(Split-Path $rc.CategoriesFilePath -Leaf) ($($toSave.Count))" "OK"
+            Write-Log "Categories" "Saved $($rc.CategoryFetchedCount) extra categories to $(Split-Path $rc.CategoriesFilePath -Leaf) ($($toSave.Count))"
         } catch {
             Write-Log "Categories" "Could not update categories cache file. See the log file for details" "WARN"
             Write-Log "Categories" "Details: $($_.Exception.Message)" "WARN" -FileOnly
@@ -458,8 +459,6 @@ function Invoke-BaselineCompare {
     $summaryCsv = Join-Path $ExportPath 'Summary.csv'
     $csvSep     = Get-CsvDelimiter
     $winSep     = [System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ListSeparator
-    # Counts as "53,332 rows", whatever the culture of the PC.
-    $inv        = [System.Globalization.CultureInfo]::InvariantCulture
 
     # A write error (folder not writable, file open in Excel, disk full) gives
     # one line; the cause goes to the log file. A progress line before the CSV
@@ -474,7 +473,7 @@ function Invoke-BaselineCompare {
     #   Exporting HTML report...
     #   Created C:\reports\...\Report.html (522 settings)   (Get-HtmlReport)
     # The view shows the file names only, as links (Add-UILogLines).
-    Write-Log "Compare" ("Comparison complete: {0} rows processed" -f $resolved.Count.ToString('N0', $inv)) "OK"
+    Write-Log "Compare" "Comparison complete: $($resolved.Count) rows processed"
     Write-Log "Report" "Report folder: $ExportPath" "INFO"
     Write-Log "Report" "Exporting CSV reports..." "INFO"
     Write-Log 'Report' ("CSV separator: '$csvSep'" + $(if ("$csvSep" -eq $winSep) { ' (Windows list separator)' } else { " (Windows list separator '$winSep' is not supported)" })) 'INFO' -FileOnly
@@ -512,15 +511,15 @@ function Invoke-BaselineCompare {
             }
         }
         $csvRows | Export-Csv $diffCsv -NoTypeInformation -Encoding utf8BOM -Delimiter $csvSep -ErrorAction Stop
-        Write-Log "Report" ("Created $diffCsv ({0} rows)" -f $resolved.Count.ToString('N0', $inv)) "OK"
+        Write-Log "Report" "Created $diffCsv ($($resolved.Count) rows)"
 
         Get-BaselineSummary -Rows $resolved |
             Export-Csv $summaryCsv -NoTypeInformation -Encoding utf8BOM -Delimiter $csvSep -ErrorAction Stop
-        Write-Log "Report" "Created $summaryCsv" "OK"
+        Write-Log "Report" "Created $summaryCsv"
 
         $htmlOutputPath = if ($ReportFile) { $ReportFile } else { Join-Path $ExportPath 'Report.html' }
         Write-Log "Report" "Exporting HTML report..." "INFO"
-        Get-HtmlReport -Rows $resolved -OutputPath $htmlOutputPath -SourceLabel $SourceLabel -TargetLabel $TargetLabel -Theme $ReportTheme
+        $reportSettings = Get-HtmlReport -Rows $resolved -OutputPath $htmlOutputPath -SourceLabel $SourceLabel -TargetLabel $TargetLabel -Theme $ReportTheme
     } catch {
         Write-Log "Compare" "Could not write the comparison data. See the log file for details" "ERROR"
         Write-Log "Compare" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
@@ -542,19 +541,32 @@ function Invoke-BaselineCompare {
     )
 
     # ── 5b. compare.log ───────────────────────────────────────────────────────
-    # Next to the report: skipped settings, same-id and same-name policies
-    # (only when any), then the compared policies. No log lines. A write error
-    # does not undo the report.
+    # Next to the report: the compared policies, then the four warning blocks
+    # (only when any; their heading line, "Policies with ...: <n>", is also the
+    # WARN line in the view, see below), then what was created. No log lines.
+    # A write error does not undo the report.
     $compareLog = Join-Path $ExportPath 'compare.log'
+    # Each block kept as its own list (the unary comma stops PowerShell from
+    # joining them).
+    $warnBlocks = @(
+        , @(Format-SameIdPolicyList -SameIdPolicies $sameId)
+        , @(Format-SameNamePolicyList -SameNamePolicies $sameName)
+        , @(Format-UnresolvedSettingList -UnresolvedSettings $unresolved)
+        , @(Format-SkippedSettingList -SkippedSettings $skippedSettings)
+    )
     try {
-        # Each block kept as its own list (the unary comma stops PowerShell
-        # from joining them), an empty line between the blocks that have lines.
+        # In compare.log the warning headings start with "WARNING: " (CMTrace
+        # and other log viewers mark lines with "warn" in them); the view
+        # line has no prefix (it is a WARN line there already).
         $blocks = @(
-            , @(Format-SkippedSettingList -SkippedSettings $skippedSettings)
-            , @(Format-SameIdPolicyList -SameIdPolicies $sameId)
-            , @(Format-SameNamePolicyList -SameNamePolicies $sameName)
             , @(Format-ComparedPolicyList -SourcePolicies $SourcePolicies -TargetPolicies $TargetPolicies)
+            foreach ($b in $warnBlocks) {
+                if ($b.Count -eq 0) { , @(); continue }
+                , @(@("WARNING: $($b[0])") + @($b | Select-Object -Skip 1))
+            }
+            , @("Created Diff.csv ($($resolved.Count) rows)", "Created Report.html ($reportSettings settings)")
         )
+        # An empty line between the blocks that have lines.
         $lines = [System.Collections.Generic.List[string]]::new()
         foreach ($b in $blocks) {
             if ($b.Count -eq 0) { continue }
@@ -567,50 +579,91 @@ function Invoke-BaselineCompare {
         Write-Log "Compare" "Details: $($_.Exception.Message)" "WARN" -FileOnly
     }
 
-    # One line each in the view / console; the items one by one in the log file:
-    #   Skipped 2 settings with an unknown setting type. See compare.log for details
-    #   Details: Skipped in source policy 'Baseline - Windows': <id> (#microsoft.graph...Instance)
-    #   Duplicate policy IDs detected. See compare.log for details
-    #   Details: Same id, target policy 'Test 2': 16546809-... shown as 'Test 2 (16546809-...#2)'
-    #   Duplicate policy names detected. See compare.log for details
-    #   Details: Same name, source policy 'FED306 - test': fc96b86b-... shown as 'FED306 - test (fc96b86b-...)'
-    if ($skippedSettings.Count -gt 0) {
-        $what = if ($skippedSettings.Count -eq 1) { '1 setting' } else { "$($skippedSettings.Count) settings" }
-        Write-Log "Compare" "Skipped $what with an unknown setting type. See compare.log for details" "WARN"
-        foreach ($k in $skippedSettings) {
-            Write-Log "Compare" "Details: Skipped in $("$($k.Side)".ToLower()) policy '$($k.PolicyName)': $($k.DefinitionId) ($($k.Type))" "WARN" -FileOnly
-        }
+    # One WARN line per warning block, its heading with the number of policies
+    # (the list itself is in compare.log only):
+    #   Policies with duplicate IDs: 2. See compare.log for details
+    #   Policies with duplicate names: 2. See compare.log for details
+    #   Policies with unresolved settings (missing setting definitions): 2. See compare.log for details
+    #   Policies with unknown setting types (not compared): 1. See compare.log for details
+    foreach ($b in $warnBlocks) {
+        if ($b.Count -gt 0) { Write-Log "Compare" "$($b[0]). See compare.log for details" "WARN" }
     }
-    if ($sameId.Count -gt 0) {
-        Write-Log "Compare" "Duplicate policy IDs detected. See compare.log for details" "WARN"
-        foreach ($d in $sameId) {
-            Write-Log "Compare" "Details: Same id, $("$($d.Side)".ToLower()) policy '$($d.Name)': $($d.PolicyId) shown as '$($d.DisplayName)'" "WARN" -FileOnly
-        }
-    }
-    if ($sameName.Count -gt 0) {
-        Write-Log "Compare" "Duplicate policy names detected. See compare.log for details" "WARN"
-        foreach ($d in $sameName) {
-            Write-Log "Compare" "Details: Same name, $("$($d.Side)".ToLower()) policy '$($d.Name)': $($d.PolicyId) shown as '$($d.DisplayName)'" "WARN" -FileOnly
-        }
-    }
-
-    # Last line: settings that are not in the setting definitions (new in
-    # Intune since the definitions were downloaded, or removed by Microsoft).
-    #   12 settings could not be resolved (no setting definition found). Download the latest setting definitions
-    $suggested = $false
-    if ($unresolvedCount -gt 0) {
-        $what = if ($unresolvedCount -eq 1) { '1 setting' } else { "$unresolvedCount settings" }
-        $msg  = "$what could not be resolved (no setting definition found)"
-        if ($SuggestDownload) { $msg += '. Download the latest setting definitions'; $suggested = $true }
-        Write-Log "Compare" $msg "WARN"
-    }
+    # Settings without a definition (new in Intune since the definitions were
+    # downloaded, or removed by Microsoft). DownloadSuggested: there are such
+    # settings and no download in the last 24 hours (-SuggestDownload).
+    $unresolvedCount = $unresolved.Count
+    $suggested = ($unresolvedCount -gt 0 -and [bool]$SuggestDownload)
 
     return [PSCustomObject]@{ Success = $true; RowCount = $resolved.Count; ReportFile = $htmlOutputPath
                               UnresolvedCount = $unresolvedCount; DownloadSuggested = $suggested
-                              SkippedSettings = $skippedSettings; SameNamePolicies = $sameName
+                              SkippedSettings = $skippedSettings; UnresolvedSettings = $unresolved; SameNamePolicies = $sameName
                               SameIdPolicies = $sameId }
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPARE.LOG BLOCKS
+# The lists of compare.log, each only when it has items. Indent: 2 spaces for
+# a group (a policy, an id or a name), 4 for its items. Source groups first,
+# then target; groups and items sorted.
+#   Policies with unknown setting types (not compared):
+#     Source policy: 'Baseline - Windows'
+#       device_vendor_msft_..._newsetting (@odata.type: #microsoft.graph...Instance)
+#   Policies with unresolved settings (missing setting definitions):
+#     Target policy: 'Prod - Device A'
+#       device_vendor_msft_..._newsetting
+#   Policies with duplicate IDs:
+#     Source id: 16546809-18df-4f3e-a468-5034ee4307c2
+#       'Test (16546809-18df-4f3e-a468-5034ee4307c2)'
+#       'Test 2 (16546809-18df-4f3e-a468-5034ee4307c2#2)'
+#   Policies with duplicate names:
+#     Source policy: 'FED306 - test'
+#       'FED306 - test (fc96b86b-65b8-4a1a-915c-a5acb84a196d)'
+#       'FED306 - test (7d3c2b1a-0f4e-4c5d-9a8b-6e7f80912345)'
+# The duplicate blocks have an empty line between their groups.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Number of policies in a block of @{ Side; Group; Item } grouped per policy:
+# the different Side + Group pairs (names case sensitive).
+function script:Get-LogGroupCount {
+    param([array]$Items)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($it in $Items) { [void]$seen.Add("$($it.Side)`t$($it.Group)") }
+    return $seen.Count
+}
+
+# Groups of @{ Side; Group; Item }: "  <Side> <label>: <Group>", then the items.
+function script:Format-LogGroups {
+    param([array]$Items, [string]$Label, [scriptblock]$GroupText, [switch]$EmptyLineBetween)
+    $first = $true
+    foreach ($side in 'Source', 'Target') {
+        $sideItems = @($Items | Where-Object { "$($_.Side)" -eq $side })
+        if ($sideItems.Count -eq 0) { continue }
+        # Ordinal: two names that only differ in case are two groups.
+        $groups = [System.Collections.Generic.SortedDictionary[string, object]]::new([System.StringComparer]::Ordinal)
+        foreach ($it in $sideItems) {
+            $g = [string]$it.Group
+            if (-not $groups.ContainsKey($g)) { $groups[$g] = [System.Collections.Generic.List[string]]::new() }
+            if (-not $groups[$g].Contains([string]$it.Item)) { $groups[$g].Add([string]$it.Item) }
+        }
+        foreach ($g in $groups.Keys) {
+            if ($EmptyLineBetween -and -not $first) { '' }
+            $first = $false
+            "  $side $($Label): $(& $GroupText $g)"
+            foreach ($line in ($groups[$g] | Sort-Object)) { "    $line" }
+        }
+    }
+}
+
+# Settings without a setting definition (Get-UnresolvedDefinitions).
+function Format-UnresolvedSettingList {
+    param([AllowNull()][AllowEmptyCollection()][array]$UnresolvedSettings)
+    $items = @(foreach ($u in @($UnresolvedSettings | Where-Object { $_ })) {
+        foreach ($p in @($u.Policies)) { [PSCustomObject]@{ Side = $p.Side; Group = $p.Name; Item = [string]$u.DefinitionId } }
+    })
+    if ($items.Count -eq 0) { return }
+    "Policies with unresolved settings (missing setting definitions): $(Get-LogGroupCount $items)"
+    Format-LogGroups -Items $items -Label 'policy' -GroupText { param($g) "'$g'" }
+}
 # ─────────────────────────────────────────────────────────────────────────────
 # SAME-ID POLICIES
 # A JSON folder can hold a copied file: two policies with the same id, which
@@ -660,66 +713,31 @@ function Resolve-DuplicatePolicyIds {
     return @{ Policies = $out; Duplicates = $dups }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DUPLICATE IDS / DUPLICATE NAMES (compare.log)
-# The policies that share an id or a name with another policy of the same
-# side (Invoke-BaselineCompare results SameIdPolicies / SameNamePolicies), one
-# group per id or name, the source and the target side below it, each policy
-# with the name it has in the report. Nothing when there are none.
-#   Policies with duplicate IDs:
-#     ID: 56546809-18df-4f3e-a468-5034ee4307c2
-#       Source:
-#         'Test 2' shown as 'Test 2 (56546809-...-07c2)'
-#         'Test 4' shown as 'Test 4 (56546809-...-07c2#2)'
-#   Policies with duplicate names:
-#     Name: 'test'
-#       Target:
-#         16546809-...-07c2 shown as 'test (16546809-...-07c2)'
-#         16546809-...-07c2 shown as 'test (16546809-...-07c2#2)'
-# ─────────────────────────────────────────────────────────────────────────────
-function script:Format-DuplicateGroups {
-    param([array]$List, [scriptblock]$GroupKey, [string]$GroupLabel, [scriptblock]$Item)
-    # Groups in the order of their key; ids are not case sensitive.
-    $groups = [ordered]@{}
-    foreach ($d in ($List | Sort-Object { & $GroupKey $_ })) {
-        $k = (& $GroupKey $d).ToLowerInvariant()
-        if (-not $groups.Contains($k)) { $groups[$k] = [System.Collections.Generic.List[object]]::new() }
-        $groups[$k].Add($d)
-    }
-    foreach ($g in $groups.Values) {
-        "  $($GroupLabel): $(& $GroupKey $g[0])"
-        foreach ($side in 'Source', 'Target') {
-            # In the order of the name in the report (the #n numbers follow it).
-            $items = @($g | Where-Object { "$($_.Side)" -eq $side } | Sort-Object { [string]$_.DisplayName })
-            if ($items.Count -eq 0) { continue }
-            "    $($side):"
-            foreach ($d in $items) { "      $(& $Item $d) shown as '$($d.DisplayName)'" }
-        }
-    }
-}
-
+# Policies that share an id with another policy of the same side
+# (SameIdPolicies): per real id, the names as in the report.
 function Format-SameIdPolicyList {
     param([AllowNull()][AllowEmptyCollection()][array]$SameIdPolicies)
-    $list = @($SameIdPolicies | Where-Object { $_ })
-    if ($list.Count -eq 0) { return }
-    'Policies with duplicate IDs:'
-    Format-DuplicateGroups -List $list -GroupLabel 'ID' `
-        -GroupKey { param($d) [string]$d.PolicyId } `
-        -Item     { param($d) "'$($d.Name)'" }
+    $items = @(foreach ($d in @($SameIdPolicies | Where-Object { $_ })) {
+        # The name in the report is "<name> (<key>)"; another name is shown too.
+        $shown = if ($d.DisplayName -ceq "$($d.Name) ($($d.Key))") { "'$($d.DisplayName)'" } else { "'$($d.Name)' shown as '$($d.DisplayName)'" }
+        [PSCustomObject]@{ Side = $d.Side; Group = ([string]$d.PolicyId).ToLowerInvariant(); Item = $shown }
+    })
+    if ($items.Count -eq 0) { return }
+    "Policies with duplicate IDs: $($items.Count)"
+    Format-LogGroups -Items $items -Label 'id' -GroupText { param($g) $g } -EmptyLineBetween
 }
 
+# Policies that share a name with another policy of the same side
+# (SameNamePolicies): per name, the names as in the report.
 function Format-SameNamePolicyList {
     param([AllowNull()][AllowEmptyCollection()][array]$SameNamePolicies)
-    $list = @($SameNamePolicies | Where-Object { $_ })
-    if ($list.Count -eq 0) { return }
-    'Policies with duplicate names:'
-    # PolicyId here is the compare key: the real id is shown, "#n" is in the
-    # name in the report.
-    Format-DuplicateGroups -List $list -GroupLabel 'Name' `
-        -GroupKey { param($d) "'$($d.Name)'" } `
-        -Item     { param($d) ([string]$d.PolicyId) -replace '#\d+$', '' }
-}
-# ─────────────────────────────────────────────────────────────────────────────
+    $items = @(foreach ($d in @($SameNamePolicies | Where-Object { $_ })) {
+        [PSCustomObject]@{ Side = $d.Side; Group = [string]$d.Name; Item = "'$($d.DisplayName)'" }
+    })
+    if ($items.Count -eq 0) { return }
+    "Policies with duplicate names: $($items.Count)"
+    Format-LogGroups -Items $items -Label 'policy' -GroupText { param($g) "'$g'" } -EmptyLineBetween
+}# ─────────────────────────────────────────────────────────────────────────────
 # POLICY DISPLAY NAMES
 # Two policies of one side with the same name (a copy in Intune) get their
 # full id after the name:
@@ -761,23 +779,16 @@ function Get-PolicyDisplayNames {
     return @{ Names = $names; Duplicates = $dups }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SKIPPED SETTINGS
-# The settings of an unknown setting type (Invoke-BaselineCompare result
-# SkippedSettings), for compare.log. Nothing when there are none.
-#   Skipped settings (unknown setting type, not compared):
-#     source policy 'Baseline - Windows': <id> (#microsoft.graph...Instance)
-# ─────────────────────────────────────────────────────────────────────────────
+# Settings of an unknown setting type (SkippedSettings), not compared.
 function Format-SkippedSettingList {
     param([AllowNull()][AllowEmptyCollection()][array]$SkippedSettings)
-    $list = @($SkippedSettings | Where-Object { $_ })
-    if ($list.Count -eq 0) { return }
-    'Skipped settings (unknown setting type, not compared):'
-    foreach ($k in $list) {
-        "  $("$($k.Side)".ToLower()) policy '$($k.PolicyName)': $($k.DefinitionId) ($($k.Type))"
-    }
+    $items = @(foreach ($k in @($SkippedSettings | Where-Object { $_ })) {
+        [PSCustomObject]@{ Side = $k.Side; Group = [string]$k.PolicyName; Item = "$($k.DefinitionId) (@odata.type: $($k.Type))" }
+    })
+    if ($items.Count -eq 0) { return }
+    "Policies with unknown setting types (not compared): $(Get-LogGroupCount $items)"
+    Format-LogGroups -Items $items -Label 'policy' -GroupText { param($g) "'$g'" }
 }
-
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPARED POLICIES
 # The compared policies, for the end of compare.log (too long for the view):
@@ -800,7 +811,7 @@ function Format-ComparedPolicyList {
         $list  = @($side[1] | Where-Object { $_ } | ForEach-Object {
                      [PSCustomObject]@{ Policy = $_; Shown = [string]$names[[string]$_.PolicyId] }
                  } | Sort-Object Shown)
-        "$($side[0]) policies ($($list.Count)):"
+        "$($side[0]) policies: $($list.Count)"
         foreach ($e in $list) {
             $p    = $e.Policy
             $pv   = if ($p.PSObject.Properties['Platforms']) { $p.Platforms } else { $null }
@@ -813,5 +824,5 @@ function Format-ComparedPolicyList {
 
 
 Export-ModuleMember -Function Compare-RawSettings, Add-IssueColumn, Invoke-BaselineCompare, Get-PolicyDisplayNames,
-                              Resolve-DuplicatePolicyIds, Format-SkippedSettingList, Format-SameIdPolicyList,
+                              Resolve-DuplicatePolicyIds, Format-SkippedSettingList, Format-UnresolvedSettingList, Format-SameIdPolicyList,
                               Format-SameNamePolicyList, Format-ComparedPolicyList

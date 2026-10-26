@@ -202,8 +202,8 @@ Initialize-BasetuneWindow
 # callback into their LogQueue, drained by the timer Tick). Without it,
 # Get-BasetuneConfig's migration warnings would go to the console via Write-Host.
 Set-LogCallback {
-    param($msg)
-    Add-UILogLines $msg
+    param($entry)
+    Add-UILogLines $entry
 }
 
 # ── Job engine timers (BasetuneJobs.psm1) ───────────────────────────────────
@@ -275,7 +275,7 @@ $UI.Window.Add_Loaded({
     # lines. Not when Config.json is invalid or unreadable (the error line says
     # why). Creating Config.json / Options.json is in the log file only.
     if (@($AppState.tenantStore.Keys).Count -eq 0 -and -not $AppState.configReadFailed) {
-        Write-UILog '[INFO][Config] Click the gear icon to configure a tenant and get started'
+        Write-UILog 'Config' 'Click the gear icon to configure a tenant and get started'
     }
 
     # Downloaded or shipped (.default) files both count.
@@ -283,18 +283,18 @@ $UI.Window.Add_Loaded({
     $missingCats = -not (Get-DefinitionFile -DefinitionsPath $AppState.definitionsPath -Kind Categories).Exists
 
     $msg = if ($missingDefs -and $missingCats) {
-        '[WARN][Definitions] No setting and category definitions found. Download definitions to resolve display names'
+        'No setting and category definitions found. Download definitions to resolve display names'
     } elseif ($missingDefs) {
-        '[WARN][Definitions] No setting definitions found. Download definitions to resolve display names'
+        'No setting definitions found. Download definitions to resolve display names'
     } elseif ($missingCats) {
-        '[WARN][Definitions] No category definitions found. Download definitions to resolve categories'
+        'No category definitions found. Download definitions to resolve categories'
     } else { $null }
 
     if ($msg) {
         # Appended, not Clear-UILog: startup lines (e.g. Get-BasetuneConfig's
         # WARN/ERROR for a plaintext or undecryptable secret) must stay.
         # Write-UILog also writes it to Basetune.log.
-        Write-UILog $msg
+        Write-UILog 'Definitions' $msg 'WARN'
     }
 
     # Show "Download Definitions" label if either file is missing.

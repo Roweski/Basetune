@@ -111,6 +111,8 @@ $cli = {
     # ==============================================
 
     Import-Module "$PSScriptRoot\Modules\Core\BasetuneCore.psd1" -Force
+    # CLI-only functions (Resolve-TenantConfig); the UI does not use them.
+    Import-Module "$PSScriptRoot\Modules\CLI\BasetuneCLI.psm1" -Force
 
     # Log file shared with the UI (Logs\Basetune.log; CMTrace Source = UI or
     # CLI). Writes go through a named mutex (Add-LogFileLine), so a CLI run next

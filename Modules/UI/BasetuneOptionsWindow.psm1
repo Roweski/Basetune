@@ -7,7 +7,7 @@
 $script:UI       = (Get-BasetuneContext).UI
 $script:AppState = (Get-BasetuneContext).State
 
-# Fixed default report folder (Basetune\Reports), see BasetuneUI.ps1.
+# Fixed default report folder (Basetune\Reports), see Basetune.ps1.
 function Get-DefaultReportPath { return $AppState.defaultReportPath }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -237,7 +237,7 @@ function Open-OptionsWindow {
 
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
-# Opens Options from the main window. Called once from BasetuneUI.ps1.
+# Opens Options from the main window. Called once from Basetune.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-OptionsWindowEvents {
     $UI.btnOpenOptions.Add_Click({ Open-OptionsWindow })

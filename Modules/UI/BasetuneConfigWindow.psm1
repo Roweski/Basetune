@@ -752,7 +752,7 @@ function Open-ConfigWindow {
                 }
             }
             if ($testPassed) {
-                Write-Log 'Config' "Connection verified for '$tenantLabel'" 'OK'
+                Write-Log 'Config' "Connection verified for '$tenantLabel'"
             } else {
                 Write-Log 'Config' "Could not connect to '$tenantLabel'. Saving anyway. See the log file for details" 'WARN'
             }
@@ -770,15 +770,15 @@ function Open-ConfigWindow {
             foreach ($k in $after.Keys) {
                 if (-not $before.ContainsKey($k)) {
                     $authShown = if ($after[$k].Auth -eq 'None') { 'None (JSON)' } else { $after[$k].Auth }
-                    Write-Log 'Config' "Created tenant '$($after[$k].Name)' with authentication method '$authShown'" 'OK'
+                    Write-Log 'Config' "Created tenant '$($after[$k].Name)' with authentication method '$authShown'"
                 }
             }
             foreach ($k in $before.Keys) {
-                if (-not $after.ContainsKey($k)) { Write-Log 'Config' "Removed tenant '$($before[$k].Name)'" 'OK' }
+                if (-not $after.ContainsKey($k)) { Write-Log 'Config' "Removed tenant '$($before[$k].Name)'" }
             }
             foreach ($k in $after.Keys) {
                 if ($before.ContainsKey($k) -and ($before[$k].Sig -ne $after[$k].Sig -or $k -eq $secretChangedKey)) {
-                    Write-Log 'Config' "Updated tenant '$($after[$k].Name)'" 'OK'
+                    Write-Log 'Config' "Updated tenant '$($after[$k].Name)'"
                 }
             }
             $AppState.cfgTenantSnapshot = $after
@@ -801,7 +801,7 @@ function Open-ConfigWindow {
             # errors) belong to tenants that are gone. Start clean with the
             # same line as a first start (the log file keeps everything).
             if ($before.Count -gt 0 -and $after.Count -eq 0) {
-                Clear-UILog '[INFO][Config] Click the gear icon to configure a tenant and get started'
+                Clear-UILog 'Config' 'Click the gear icon to configure a tenant and get started'
             }
             Clear-UnsavedChanges
             # After a save: the saved tenant stays selected (the connection
@@ -855,7 +855,7 @@ function Open-ConfigWindow {
 
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
-# Opens Tenant Configuration from the main window. Called once from BasetuneUI.ps1.
+# Opens Tenant Configuration from the main window. Called once from Basetune.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-ConfigWindowEvents {
     $UI.btnOpenConfig.Add_Click({ Open-ConfigWindow })

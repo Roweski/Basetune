@@ -243,7 +243,7 @@ function Set-FilterMode {
 # a load that found nothing is kept, unless -Force (tenant switch, typing in
 # that side's filter).
 $script:ReadyText    = 'Ready to load policies'
-$script:NoTenantText = 'Configure a tenant to get started'   # clickable (XAML trigger on this exact text + click handler in BasetuneUI.ps1)
+$script:NoTenantText = 'Configure a tenant to get started'   # clickable (XAML trigger on this exact text + click handler in Basetune.ps1)
 function Get-LoadingCardText {
     param([string]$Filter)
     if ($Filter) { "Loading policies with filter '$Filter'" } else { 'Loading policies' }
@@ -458,7 +458,7 @@ function Enable-WholeLineList {
         catch {
             if (-not $state.Logged) {
                 $state.Logged = $true
-                Write-UILog '[WARN][Basetune] Could not adjust the policy list layout. See the log file for details'
+                Write-UILog 'Basetune' 'Could not adjust the policy list layout. See the log file for details' 'WARN'
                 Write-Log 'Basetune' "Details: $($_.Exception.Message)" 'WARN' -FileOnly
             }
         }
@@ -516,7 +516,7 @@ function Enable-PolicyListKeys {
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
 # Wires the policy list, filter and tenant dropdown handlers. Called once
-# from BasetuneUI.ps1.
+# from Basetune.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-PolicyListEvents {
     # Checkbox routed events → Update-Counts. Not during Set-VisibleSelection

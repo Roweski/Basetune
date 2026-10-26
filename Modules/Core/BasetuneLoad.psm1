@@ -183,7 +183,7 @@ function Read-PoliciesFromJson {
 
     # Same line as for API tenants: "Loaded 24 policies with filter 'x'".
     $loadedMsg = Format-LoadedMessage -Count $policies.Count -Filter $Filter -Policies $policies -Platforms $Platforms
-    Write-Log $Label $loadedMsg "OK"
+    Write-Log $Label $loadedMsg
     return $policies
 }
 
@@ -256,7 +256,7 @@ function Read-PoliciesFromTenant {
     $all = @(Get-GraphPagedResults -Connection $Connection -Quiet `
         -Uri "$GraphBeta/deviceManagement/configurationPolicies?`$select=id,name,description,platforms,technologies,templateReference")
     $noun = if ($all.Count -eq 1) { 'policy' } else { 'policies' }
-    Write-Log $Label "Fetched $($all.Count) $noun from Graph API" "OK"
+    Write-Log $Label "Fetched $($all.Count) $noun from Graph API"
 
     $selected = if ($Filter) {
         $all | Where-Object { $_.name -like "*$Filter*" }
@@ -356,9 +356,9 @@ function Read-PoliciesFromTenant {
                 # Also to the log file (no Set-LogFile in the worker), same
                 # mutex as the "Expanded settings" lines below.
                 Set-LogCallback ({
-                    param($m)
-                    $_q.Enqueue($m)
-                    if ($_lfPath) { Add-LogFileLine -Path $_lfPath -Line $m -Source $_lfSrc }
+                    param($entry)
+                    $_q.Enqueue($entry)
+                    if ($_lfPath) { Add-LogFileLine -Path $_lfPath -Entry $entry -Source $_lfSrc }
                 }.GetNewClosure())
             }
 
@@ -395,7 +395,7 @@ function Read-PoliciesFromTenant {
                         [System.Threading.Monitor]::Exit($_net.SyncRoot)
                     }
                     # CLI only: in the UI the network watcher already reports
-                    # it ("[WARN][Network] Network connection lost...").
+                    # it ("Network connection lost...").
                     if ($first -and -not $using:LogQueue) {
                         Write-Log $using:Label "Network unavailable. Waiting for requests in progress to time out (max 30 seconds)..." "WARN"
                     }
@@ -421,9 +421,9 @@ function Read-PoliciesFromTenant {
             [System.Threading.Monitor]::Enter($_prog.SyncRoot)
             try { $_prog.N = [int]$_prog.N + 1; $_pos = " [$($_prog.N)/$($_prog.Total)]" }
             finally { [System.Threading.Monitor]::Exit($_prog.SyncRoot) }
-            $_msg   = "[INFO][$_label] Expanded settings: $_name$_pos"
+            $_entry = New-LogEntry $_label "Expanded settings: $_name$_pos"
             if ($_lq) {
-                $_lq.Enqueue($_msg)
+                $_lq.Enqueue($_entry)
             } else {
                 Write-Log $_label "Expanded settings: $_name$_pos" "INFO"
             }
@@ -432,7 +432,7 @@ function Read-PoliciesFromTenant {
             if ($_lf) {
                 # Add-LogFileLine serialises with a named mutex (shared with
                 # the UI, its runspaces and the CLI).
-                Add-LogFileLine -Path $_lf -Line $_msg -Source $using:LogSource
+                Add-LogFileLine -Path $_lf -Entry $_entry -Source $using:LogSource
             }
 
             # List-call fields ($policy) + expanded settings ($r): so
@@ -513,7 +513,7 @@ function Read-PoliciesFromTenant {
 
     Write-SkipSummary -Label $Label -Counts $failCounts -Noun 'policy'
     Write-PlatformSkipLog -Label $Label -Skipped $skipped
-    Write-Log $Label (Format-LoadedMessage -Count $loaded.Count -Filter $Filter -Policies $loaded -Platforms $Platforms) "OK"
+    Write-Log $Label (Format-LoadedMessage -Count $loaded.Count -Filter $Filter -Policies $loaded -Platforms $Platforms)
     return $loaded.ToArray()
 }
 

@@ -82,7 +82,7 @@ function Test-NetworkUp {
 # RUNSPACE ENGINE
 #
 # Runs $Work in a background runspace with $Shared and a ConcurrentQueue
-# $LogQueue; a DispatcherTimer streams the queued log lines into the UI and
+# $LogQueue; a DispatcherTimer streams the queued log entries into the UI and
 # calls $OnDone when the job ends.
 #
 # $Shared always gets a common base (ScriptRoot, GraphBeta, ModulesPath,
@@ -122,7 +122,7 @@ function Start-Runspace {
     $ps = [System.Management.Automation.PowerShell]::Create()
     $ps.Runspace = $rs
 
-    $queue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $queue = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
     $rs.SessionStateProxy.SetVariable('LogQueue', $queue)
 
     $ps.AddScript($Work) | Out-Null
@@ -153,35 +153,33 @@ function Start-Runspace {
         $job = $AppState.CurrentJob
         if (-not $job) { return }
 
-        # Drain up to $maxPerTick lines into one StringBuilder and add them in
-        # one call: each append is a TextBox layout pass, and a noisy export
-        # can queue thousands of lines. The cap keeps the UI thread responsive;
-        # the rest waits for the next tick (nothing is lost). At job end the
-        # drain is uncapped so OnDone sees the full log.
+        # Drain up to $maxPerTick log entries into one batch and add them in
+        # one call: each call is a layout pass, and a noisy export can queue
+        # thousands of lines. The cap keeps the UI thread responsive; the rest
+        # waits for the next tick (nothing is lost). At job end the drain is
+        # uncapped so OnDone sees the full log.
         $maxPerTick = 500
-        $sb         = [System.Text.StringBuilder]::new()
-        $drained    = 0
+        $batch      = [System.Collections.Generic.List[object]]::new()
         $item       = $null
-        while ($drained -lt $maxPerTick -and $job.Queue.TryDequeue([ref]$item)) {
-            [void]$sb.Append($item).Append("`n")
-            $drained++
+        while ($batch.Count -lt $maxPerTick -and $job.Queue.TryDequeue([ref]$item)) {
+            $batch.Add($item)
         }
-        if ($sb.Length -gt 0) {
+        if ($batch.Count -gt 0) {
             # Add-UILogLines also trims the view to a rolling window of lines.
-            Add-UILogLines $sb.ToString()
+            Add-UILogLines $batch.ToArray()
         }
 
         if (-not $job.Done -and $job.Handle.IsCompleted) {
             $job.Done = $true
             $job.Timer.Stop()
             # Final drain: uncapped, one batch, so OnDone logs after a complete log.
-            $sb   = [System.Text.StringBuilder]::new()
-            $item = $null
+            $batch = [System.Collections.Generic.List[object]]::new()
+            $item  = $null
             while ($job.Queue.TryDequeue([ref]$item)) {
-                [void]$sb.Append($item).Append("`n")
+                $batch.Add($item)
             }
-            if ($sb.Length -gt 0) {
-                Add-UILogLines $sb.ToString()
+            if ($batch.Count -gt 0) {
+                Add-UILogLines $batch.ToArray()
             }
             # EndInvoke() returns the pipeline output (capture before Dispose);
             # OnDone reads it from $AppState.CurrentJob.Output.
@@ -210,7 +208,7 @@ function Start-Runspace {
             if ($job.Errors.Count -gt 0) {
                 $jobLabel = if ($job.Type) { $job.Type } else { 'Job' }
                 # One line in the log view; the errors themselves only in the log file.
-                Write-UILog "[ERROR][$jobLabel] Unexpected error. See the log file for details"
+                Write-UILog $jobLabel "Unexpected error. See the log file for details" 'ERROR'
                 foreach ($m in $job.Errors) {
                     Write-Log $jobLabel "Details: $m" 'ERROR' -FileOnly
                 }
@@ -244,10 +242,10 @@ function Start-Runspace {
                     [System.Action]{ foreach ($d in $toDispose) { if ($d) { try { $d.Dispose() } catch {} } } }.GetNewClosure())
 
                 # Compare/Load make the largest allocations: drop the
-                # references that still hold them ($Error, the StringBuilder).
+                # references that still hold them ($Error, the log batch).
                 if ($jobType -in @('Compare','Load')) {
                     $Error.Clear()
-                    $sb = $null
+                    $batch = $null
                 }
                 # Full GC only after Compare (Load allocates little), and only
                 # when the UI is idle (Request-DeferredMemoryCleanup): run here,
@@ -319,13 +317,14 @@ function Stop-ActiveRunspace {
 
     # Side: 'Source', 'Target', 'Download', 'Compare', 'Source Export', ...
     $what = switch ($Side) {
-        { $_ -in 'Source', 'Target' } { "[WARN][$Side] Loading cancelled by user"; break }
-        'Download'                    { "[WARN][Download] Download cancelled by user"; break }
-        'Compare'                     { "[WARN][Compare] Compare cancelled by user"; break }
-        ''                            { "[WARN][Basetune] Operation cancelled"; break }
-        default                       { "[WARN][$Side] $Side cancelled" }
+        { $_ -in 'Source', 'Target' } { 'Loading cancelled by user'; break }
+        'Download'                    { 'Download cancelled by user'; break }
+        'Compare'                     { 'Compare cancelled by user'; break }
+        ''                            { 'Operation cancelled'; break }
+        default                       { "$Side cancelled" }
     }
-    Write-UILog $what
+    $sideLabel = if ($Side) { $Side } else { 'Basetune' }
+    Write-UILog $sideLabel $what 'WARN'
     # A cancelled load also says so in the middle of the (empty) card.
     if ($Side -in 'Source', 'Target') {
         $noMatch = if ($Side -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
@@ -336,7 +335,7 @@ function Stop-ActiveRunspace {
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
 # Creates the job timers (network watcher, stop cleanup, compare Cancel).
-# Called once from BasetuneUI.ps1.
+# Called once from Basetune.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-BasetuneJobs {
     # Compact the Large Object Heap on the next GC.Collect(). Parsing
@@ -360,9 +359,9 @@ function Initialize-BasetuneJobs {
         $up = Test-NetworkUp
         if (-not $up -and $AppState.NetWatchWasUp) {
             $maxWait = if ($job.Type -eq 'Download') { 60 } else { 30 }
-            Write-UILog "[WARN][Network] Network connection lost. Waiting for requests in progress to time out (max $maxWait seconds)..."
+            Write-UILog 'Network' "Network connection lost. Waiting for requests in progress to time out (max $maxWait seconds)..." 'WARN'
         } elseif ($up -and -not $AppState.NetWatchWasUp) {
-            Write-UILog "[INFO][Network] Network connection restored"
+            Write-UILog 'Network' "Network connection restored"
         }
         $AppState.NetWatchWasUp = $up
     })

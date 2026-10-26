@@ -1,8 +1,9 @@
 # =============================================================================
 # BasetuneConfig.psm1
 # Basetune's own settings files, for CLI and UI:
-#   Config.json   tenants (Get-BasetuneConfig, Resolve-TenantConfig; secrets
-#                 stay encrypted, plaintext is migrated to DPAPI)
+#   Config.json   tenants (Get-BasetuneConfig; secrets stay encrypted,
+#                 plaintext is migrated to DPAPI). Picking a tenant by id
+#                 for the CLI: Resolve-TenantConfig in Modules\CLI.
 #   Options.json  report path, platforms, theme, max threads
 #                 (Get-BasetuneOptions, Save-BasetuneOptions)
 #
@@ -455,47 +456,8 @@ function Save-BasetuneOptions {
     $out | ConvertTo-Json -Depth 4 | Out-File -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Resolve-TenantConfig
-#
-# Source and target tenant nodes by SourceId / TargetId (no default; an
-# invalid entry gives $null).
-# ─────────────────────────────────────────────────────────────────────────────
-function Resolve-TenantConfig {
-    param(
-        [Parameter(Mandatory)]$Cfg,
-        [string]$SourceId = "",
-        [string]$TargetId = ""
-    )
-
-    $srcKey = if ($SourceId) { $SourceId } else { $null }
-    $tgtKey = if ($TargetId) { $TargetId } else { $null }
-
-    # Safe lookup: strict mode throws on a missing property
-    $srcNode = $null
-    $tgtNode = $null
-    if ($srcKey -and $Cfg.tenant) {
-        $prop = $Cfg.tenant.PSObject.Properties[$srcKey]
-        if ($prop) { $srcNode = $prop.Value }
-    }
-    if ($tgtKey -and $Cfg.tenant) {
-        $prop = $Cfg.tenant.PSObject.Properties[$tgtKey]
-        if ($prop) { $tgtNode = $prop.Value }
-    }
-
-    if ($srcNode -and $srcNode.PSObject.Properties['__invalid'] -and $srcNode.__invalid) { $srcNode = $null }
-    if ($tgtNode -and $tgtNode.PSObject.Properties['__invalid'] -and $tgtNode.__invalid) { $tgtNode = $null }
-
-    return [PSCustomObject]@{
-        source = $srcNode
-        target = $tgtNode
-        tenant = $Cfg.tenant
-    }
-}
-
 Export-ModuleMember -Function @(
     'Get-BasetuneConfig',
     'Get-BasetuneOptions',
-    'Save-BasetuneOptions',
-    'Resolve-TenantConfig'
+    'Save-BasetuneOptions'
 )

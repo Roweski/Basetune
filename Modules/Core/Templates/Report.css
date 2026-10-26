@@ -46,7 +46,7 @@
         transition: background-color 0.3s, color 0.3s;
     }
     .theme-toggle {
-        position: fixed; top: 20px; right: 20px;
+        position: absolute; top: 20px; right: 20px;
         background: var(--bg-card); border: 1px solid var(--border-color);
         padding: 10px; border-radius: 50%; cursor: pointer;
         box-shadow: var(--card-shadow); display: flex; align-items: center;

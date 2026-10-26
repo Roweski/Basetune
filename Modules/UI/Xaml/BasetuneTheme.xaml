@@ -15,7 +15,7 @@
       AccentSoftBrush HoverBrush DisabledBgBrush DisabledFgBrush DisabledBorderBrush IconFgBrush
       SecBtnFgBrush SecBtnBgBrush SectionLabelBrush ConsoleBgBrush ConsoleFgBrush ConsoleBtnBgBrush
       ConsoleBtnBorderBrush ConsoleIconFgBrush ScrollThumbBrush PopupBgBrush
-      PopupBorderBrush WarnBrush ErrorBrush CaptionHoverBrush
+      PopupBorderBrush WarnBrush ErrorBrush AttentionBrush AttentionHoverBrush CaptionHoverBrush
       CaptionPressedBrush
 -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"

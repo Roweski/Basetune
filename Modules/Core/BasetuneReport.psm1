@@ -310,7 +310,9 @@ function Get-HtmlReport {
     $html = $html -creplace '\{\{DATA\}\}', { $jsonData }
 
     $html | Out-File -FilePath $OutputPath -Encoding UTF8 -ErrorAction Stop
-    Write-Log "Report" ("Created $OutputPath ({0} settings)" -f ([int]$totalSettings).ToString('N0', [System.Globalization.CultureInfo]::InvariantCulture)) "OK"
+    Write-Log "Report" "Created $OutputPath ($totalSettings settings)"
+    # The number of settings, for the summary at the end of compare.log.
+    return $totalSettings
 }
 
 Export-ModuleMember -Function Get-BaselineSummary, Get-HtmlReport

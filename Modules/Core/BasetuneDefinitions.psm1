@@ -114,6 +114,20 @@ function ConvertTo-SlimSettingDefinition {
     return [PSCustomObject]$slim
 }
 
+# Categories, the same way: the compare only uses id, displayName and
+# parentCategoryId (Get-CategoryPath). Graph also returns description,
+# categoryDescription, helpText, name, platforms, technologies, settingUsage,
+# rootCategoryId and childCategoryIds.
+function ConvertTo-SlimSettingCategory {
+    param([Parameter(Mandatory)]$Category)
+    $c    = $Category
+    $slim = [ordered]@{ id = $c.id }
+    foreach ($p in 'displayName', 'parentCategoryId') {
+        if ($c.PSObject.Properties[$p] -and $null -ne $c.$p) { $slim[$p] = $c.$p }
+    }
+    return [PSCustomObject]$slim
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DOWNLOAD SETTING DEFINITIONS & CATEGORIES
 #
@@ -169,6 +183,9 @@ function Invoke-DefinitionDownload {
     if ($categories.Count -eq 0) {
         throw "Retrieved 0 categories. Existing files were left unchanged"
     }
+    $categories = @(foreach ($c in $categories) {
+        if ($c -and $c.id) { ConvertTo-SlimSettingCategory -Category $c }
+    })
     Write-Log "Download" "Removed unused properties from the definitions" "INFO"
 
     # Some categories are missing from the configurationCategories list; the
@@ -185,7 +202,7 @@ function Invoke-DefinitionDownload {
                 $_.displayName -notin @('[Unresolved Category]','[Unknown Category]') -and -not $_.PSObject.Properties['__placeholder']
             })
             if ($kept.Count -gt 0) {
-                $categories += $kept
+                $categories += @(foreach ($k in $kept) { ConvertTo-SlimSettingCategory -Category $k })
                 Write-Log "Download" "Kept $($kept.Count) extra categories from $($catsExisting.Name)" "INFO"
             }
         } catch {
@@ -212,8 +229,8 @@ function Invoke-DefinitionDownload {
             if (Test-Path -LiteralPath $t) { Remove-Item -LiteralPath $t -Force -ErrorAction SilentlyContinue }
         }
     }
-    Write-Log "Download" "Saved definitions to $definitionsFile ($($definitions.Count))" "OK"
-    Write-Log "Download" "Saved categories to $categoriesFile ($($categories.Count))" "OK"
+    Write-Log "Download" "Saved definitions to $definitionsFile ($($definitions.Count))"
+    Write-Log "Download" "Saved categories to $categoriesFile ($($categories.Count))"
 
     # Build the lookups from the downloaded objects, so the UI can refresh its
     # cache without parsing the file on the UI thread (freezes the window for
@@ -221,10 +238,10 @@ function Invoke-DefinitionDownload {
     # before "Download complete".
     $defLookup = ConvertTo-SettingDefinitionLookup -Definitions $definitions
     $catMap    = ConvertTo-SettingCategoryMap      -Categories  $categories
-    Write-Log "Download" "Cached $($defLookup.Count) setting definitions from $(Split-Path $definitionsFile -Leaf)" "OK"
-    Write-Log "Download" "Cached $($catMap.Count) category definitions from $(Split-Path $categoriesFile -Leaf)" "OK"
+    Write-Log "Download" "Cached $($defLookup.Count) setting definitions from $(Split-Path $definitionsFile -Leaf)"
+    Write-Log "Download" "Cached $($catMap.Count) category definitions from $(Split-Path $categoriesFile -Leaf)"
 
-    Write-Log "Download" "Download complete" "OK"
+    Write-Log "Download" "Download complete"
 
     return [PSCustomObject]@{
         DefinitionLookup = $defLookup
@@ -269,11 +286,11 @@ function Get-CompareDefinitions {
     $defLookup = $null
     if ($hasCachedDefs) {
         $defLookup = $CachedLookup
-        Write-Log 'Definitions' "Loaded $($defLookup.Count) setting definitions from cache" 'OK'
+        Write-Log 'Definitions' "Loaded $($defLookup.Count) setting definitions from cache"
     } elseif ($defsFile.Exists) {
         try {
             $defLookup = Import-SettingDefinitions -Path $defsFile.Path
-            Write-Log 'Definitions' "Loaded $($defLookup.Count) setting definitions from $($defsFile.Name)" 'OK'
+            Write-Log 'Definitions' "Loaded $($defLookup.Count) setting definitions from $($defsFile.Name)"
         } catch {
             $defLookup = $null
             Write-Log 'Definitions' 'Could not read setting definitions. Display names will not be resolved' 'WARN'
@@ -284,11 +301,11 @@ function Get-CompareDefinitions {
     $catMap = $null
     if ($hasCachedCats) {
         $catMap = $CachedCategoryById
-        Write-Log 'Categories' "Loaded $($catMap.Count) category definitions from cache" 'OK'
+        Write-Log 'Categories' "Loaded $($catMap.Count) category definitions from cache"
     } elseif ($catsFile.Exists) {
         try {
             $catMap = Import-SettingCategories -Path $catsFile.Path
-            Write-Log 'Categories' "Loaded $($catMap.Count) category definitions from $($catsFile.Name)" 'OK'
+            Write-Log 'Categories' "Loaded $($catMap.Count) category definitions from $($catsFile.Name)"
         } catch {
             $catMap = $null
             Write-Log 'Categories' 'Could not read category definitions. Categories will not be resolved' 'WARN'
@@ -307,6 +324,7 @@ Export-ModuleMember -Function @(
     'Import-SettingDefinitions',
     'Import-SettingCategories',
     'ConvertTo-SlimSettingDefinition',
+    'ConvertTo-SlimSettingCategory',
     'Invoke-DefinitionDownload',
     'Get-CompareDefinitions'
 )

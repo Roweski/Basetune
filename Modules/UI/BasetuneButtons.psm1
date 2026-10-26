@@ -8,7 +8,7 @@
 
 # Controls of the main and config window, by x:Name (BasetuneState.psm1).
 $script:UI = (Get-BasetuneContext).UI
-# Current job, list items, selection state (initialised in BasetuneUI.ps1).
+# Current job, list items, selection state (initialised in Basetune.ps1).
 $script:AppState = (Get-BasetuneContext).State
 
 # ── Busy state — turns the active Load button into Cancel; restores on done ──
@@ -211,18 +211,20 @@ function Set-CompareButtonMode {
 
 # Button style with the XAML SecBtn shape (square, rounded corners) but a
 # coloured fill and border and a white foreground. Used for the Download
-# button when no definition files exist (orange): same size as the other
-# icon-bar buttons, but it stands out.
-function script:New-BlueIconButtonStyle {
-    param([string]$Bg = '#1A6EF5', [string]$BgHover = '#1662D9')
+# button when no definition files exist: same size as the other icon-bar
+# buttons, but it stands out. -Bg / -BgHover are palette keys (BasetuneWpf
+# palettes), read as DynamicResource, so the colour lives in one place and
+# follows a theme switch.
+function script:New-FilledIconButtonStyle {
+    param([string]$Bg = 'AttentionBrush', [string]$BgHover = 'AttentionHoverBrush')
     $xaml = @"
 <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
        TargetType="Button">
-  <Setter Property="Background"      Value="$Bg"/>
+  <Setter Property="Background"      Value="{DynamicResource $Bg}"/>
   <Setter Property="Foreground"      Value="White"/>
   <Setter Property="FocusVisualStyle" Value="{DynamicResource PrimaryFocusVisual}"/>
-  <Setter Property="BorderBrush"     Value="$Bg"/>
+  <Setter Property="BorderBrush"     Value="{DynamicResource $Bg}"/>
   <Setter Property="BorderThickness" Value="1"/>
   <Setter Property="Cursor"          Value="Hand"/>
   <Setter Property="Template">
@@ -236,8 +238,8 @@ function script:New-BlueIconButtonStyle {
         </Border>
         <ControlTemplate.Triggers>
           <Trigger Property="IsMouseOver" Value="True">
-            <Setter Property="Background"  Value="$BgHover"/>
-            <Setter Property="BorderBrush" Value="$BgHover"/>
+            <Setter Property="Background"  Value="{DynamicResource $BgHover}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource $BgHover}"/>
           </Trigger>
           <Trigger Property="IsEnabled" Value="False">
             <Setter Property="Background"  Value="{DynamicResource DisabledBgBrush}"/>
@@ -254,8 +256,7 @@ function script:New-BlueIconButtonStyle {
     return [System.Windows.Markup.XamlReader]::Parse($xaml)
 }
 
-$script:styleBlueIcon   = $null
-$script:styleOrangeIcon = $null   # same shape, orange (#f0a340, as on basetune.dev)
+$script:styleOrangeIcon = $null   # filled with AttentionBrush (orange, as on basetune.dev)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Download button look (icon-only square):
@@ -292,7 +293,7 @@ function Set-DownloadButtonStyle {
     if ($Missing) {
         # No definition files at all - orange, so it is clear where to start.
         if (-not $script:styleOrangeIcon) {
-            $script:styleOrangeIcon = New-BlueIconButtonStyle -Bg '#F0A340' -BgHover '#D98E2B'
+            $script:styleOrangeIcon = New-FilledIconButtonStyle -Bg 'AttentionBrush' -BgHover 'AttentionHoverBrush'
         }
         $btn.Style = $script:styleOrangeIcon
         $btn.ToolTip = 'Download Definitions'

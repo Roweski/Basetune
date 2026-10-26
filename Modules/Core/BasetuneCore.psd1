@@ -18,12 +18,12 @@
 #
 # Modules\Core is engine: no WPF, used by the CLI, the UI and its runspaces
 # (which import only this manifest). The UI modules (WPF, shared UI context)
-# are imported separately by BasetuneUI.ps1.
+# are imported separately by Basetune.ps1.
 # =============================================================================
 @{
     # The Basetune version, the one place to change it for a release (UI
     # title, CLI -Help, log file, report footer; Get-BasetuneVersion).
-    ModuleVersion = '3.0.0'
+    ModuleVersion = '3.0.1'
 
     NestedModules = @(
         'BasetuneHelpers.psm1',

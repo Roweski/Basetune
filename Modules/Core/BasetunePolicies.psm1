@@ -1047,31 +1047,50 @@ function Merge-CollectionSettings {
     }
 }
 
-# Number of different settings in the compare without a setting definition
-# (shown with their DefinitionId instead of a name). Instance keys
-# (baseId@@ruleName) and key/value ids (id||key) count by their base id.
-function Get-UnresolvedDefinitionCount {
+# The different settings in the compare without a setting definition (shown
+# with their DefinitionId instead of a name), each with the policies that hold
+# it, for the log line and compare.log. Instance keys (baseId@@ruleName) and
+# key/value ids (id||key) count by their base id. Sorted on id.
+# Returns a list of @{ DefinitionId; Policies = list of @{ Side; Name } }
+# (Side 'Source' / 'Target', each policy once), empty when definitions are
+# not loaded: then nothing is resolved and nothing is reported.
+function Get-UnresolvedDefinitions {
     param([AllowNull()][AllowEmptyCollection()][array]$Diff)
     $lookup = $script:Resolve.DefinitionLookup
-    if (-not $lookup -or $lookup.Count -eq 0) { return 0 }
-    $missing = [System.Collections.Generic.HashSet[string]]::new()
-    # Each DefinitionId once: many rows share one (one row per policy pair).
-    # Read by index, not HashSet.Add: a method call per row is slow.
-    $seen = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+    if (-not $lookup -or $lookup.Count -eq 0) { return @() }
+    # Row DefinitionId -> base id without definition, or '' (has one).
+    # Worked out once per DefinitionId: many rows share one.
+    $baseOf   = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+    # Base id (lower case) -> @{ Id = first spelling seen; Policies = @{} }
+    $missing  = @{}
     foreach ($d in $Diff) {
         if (-not $d -or -not $d.DefinitionId) { continue }
-        $id = [string]$d.DefinitionId
-        if ($seen[$id]) { continue }
-        $seen[$id] = $true
-        # Split-InstanceKey only for ids with an instance key (a function call
-        # per setting otherwise); the lookup read by index (its values are
-        # definitions, never $null) instead of ContainsKey.
-        if ($id -like '*@@*') { $id = (Split-InstanceKey -DefinitionId $d.DefinitionId).BaseId }
-        if ($id -match '^(.+?)\|\|') { $id = $Matches[1] }
-        $key = $id.Trim().ToLowerInvariant()
-        if ($null -eq $lookup[$key]) { [void]$missing.Add($key) }
+        $id   = [string]$d.DefinitionId
+        $base = $baseOf[$id]
+        if ($null -eq $base) {
+            $b = $id
+            if ($b -like '*@@*') { $b = (Split-InstanceKey -DefinitionId $id).BaseId }
+            if ($b -match '^(.+?)\|\|') { $b = $Matches[1] }
+            $b = $b.Trim()
+            # The lookup read by index (its values are definitions, never $null).
+            $base = if ($null -eq $lookup[$b.ToLowerInvariant()]) { $b } else { '' }
+            $baseOf[$id] = $base
+        }
+        if (-not $base) { continue }
+        $key = $base.ToLowerInvariant()
+        $m = $missing[$key]
+        if (-not $m) { $m = @{ Id = $base; Policies = [System.Collections.Generic.Dictionary[string, bool]]::new([System.StringComparer]::Ordinal) }; $missing[$key] = $m }
+        # Key "Side<TAB>Name": each policy once (case sensitive names).
+        if ($d.SourcePolicyName) { $m.Policies["Source`t$($d.SourcePolicyName)"] = $true }
+        if ($d.TargetPolicyName) { $m.Policies["Target`t$($d.TargetPolicyName)"] = $true }
     }
-    return $missing.Count
+    return @(foreach ($k in ($missing.Keys | Sort-Object)) {
+        $pols = @(foreach ($p in $missing[$k].Policies.Keys) {
+            $side, $name = $p -split "`t", 2
+            [PSCustomObject]@{ Side = $side; Name = $name }
+        })
+        [PSCustomObject]@{ DefinitionId = $missing[$k].Id; Policies = $pols }
+    })
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1080,7 +1099,7 @@ function Get-UnresolvedDefinitionCount {
 
 Export-ModuleMember -Function @(
     'Initialize-ResolveContext',
-    'Get-UnresolvedDefinitionCount',
+    'Get-UnresolvedDefinitions',
     'Get-RawSettings',
     'ConvertTo-SettingObjects',
     'Merge-CollectionSettings',

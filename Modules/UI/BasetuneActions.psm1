@@ -90,7 +90,7 @@ function Start-Load {
     $selectedKey = $cmb.SelectedValue
 
     if (-not $selectedKey) {
-        Clear-UILog "[INFO][$Side] No $($Side.ToLowerInvariant()) tenant selected. Add a tenant via Tenant Configuration first"
+        Clear-UILog $Side "No $($Side.ToLowerInvariant()) tenant selected. Add a tenant via Tenant Configuration first"
         Set-Busy $false
         return
     }
@@ -111,7 +111,7 @@ function Start-Load {
 
     $resolvedPath = if ($origin -eq 'Offline' -and -not $tenantJsonPath) {
         $label = Get-UITenantLabel $selectedKey
-        Clear-UILog "[ERROR][$Side] No path configured for '$label'. Open Tenant Configuration and set a policy folder"
+        Clear-UILog $Side "No path configured for '$label'. Open Tenant Configuration and set a policy folder" 'ERROR'
         Set-Busy $false
         return
     } else {
@@ -121,10 +121,10 @@ function Start-Load {
     if ($origin -eq 'Offline' -and -not (Test-Path $resolvedPath)) {
         try {
             New-Item -ItemType Directory -Path $resolvedPath -Force | Out-Null
-            Write-UILog "[INFO][${Side}] Created folder: $resolvedPath"
+            Write-UILog $Side "Created folder: $resolvedPath"
         } catch {
             $err = $_
-            Clear-UILog "[ERROR][$Side] Could not create folder: $resolvedPath. See the log file for details"
+            Clear-UILog $Side "Could not create folder: $resolvedPath. See the log file for details" 'ERROR'
             Write-Log $Side "Details: $($err.Exception.Message)" 'ERROR' -FileOnly
             Set-Busy $false
             return
@@ -144,9 +144,9 @@ function Start-Load {
 
     $tenantLabel = Get-UITenantLabel $selectedKey
     $originDesc  = if ($origin -eq 'Offline') { '(JSON)' } else { '(API)' }
-    Clear-UILog "[INFO][$Side] Loading $($Side.ToLowerInvariant()) policies from $tenantLabel $originDesc..."
-    Write-UILog "[INFO][$Side] Policy name filter: $(if ($filter) { "'$filter'" } else { 'None' })"
-    Write-UILog "[INFO][$Side] Platform filter: $(Get-PlatformsText ([string[]]$AppState.savedPlatforms))"
+    Clear-UILog $Side "Loading $($Side.ToLowerInvariant()) policies from $tenantLabel $originDesc..."
+    Write-UILog $Side "Policy name filter: $(if ($filter) { "'$filter'" } else { 'None' })"
+    Write-UILog $Side "Platform filter: $(Get-PlatformsText ([string[]]$AppState.savedPlatforms))"
 
     # Only the fields Load needs. TenantNode passes through SetVariable as a
     # real PSCustomObject (no JSON round-trip).
@@ -320,12 +320,12 @@ function Start-Load {
         } elseif ($loadOk) {
             # Success is already logged by the load module ("Loaded 24 policies with filter 'x'").
         } elseif ($status -and $status.Reason -eq 'connection') {
-            Write-UILog "[ERROR][$sideLabel] Could not load policies. See the log file for details"
+            Write-UILog $sideLabel "Could not load policies. See the log file for details" 'ERROR'
             $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
             if ($noMatch) { $noMatch.Text = 'Could not load policies' }
         } else {
             # API and JSON tenants; the cause is in the log (e.g. unreadable files).
-            Write-UILog "[ERROR][$sideLabel] Could not load policies. See the errors above"
+            Write-UILog $sideLabel "Could not load policies. See the errors above" 'ERROR'
             $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
             if ($noMatch) { $noMatch.Text = 'Could not load policies' }
         }
@@ -363,7 +363,7 @@ function Start-Compare {
     $tgtFiltered = @($AppState.targetItems | Where-Object { $_.IsChecked -and $_.Policy } | ForEach-Object { $_.Policy })
 
     if ($srcFiltered.Count -eq 0 -or $tgtFiltered.Count -eq 0) {
-        Clear-UILog "[WARN][Compare] Select at least one source and one target policy"
+        Clear-UILog 'Compare' "Select at least one source and one target policy" 'WARN'
         return
     }
     # Selection of this compare: View Report / View Details only come on
@@ -372,7 +372,7 @@ function Start-Compare {
     $AppState.compareSelectionChangedLogged = $false
     $AppState.compareSelectionNotePending = $false
 
-    Clear-UILog ''
+    Clear-UILog
     # Compare is disabled while it runs, so WPF drops the keyboard focus (the
     # next Tab would start at the top). Remembered, and put back on Run Report
     # (or Compare) when done.
@@ -397,7 +397,7 @@ function Start-Compare {
         New-Item -ItemType Directory -Path $runReportDir -Force -ErrorAction Stop | Out-Null
     } catch {
         $err = $_
-        Clear-UILog "[ERROR][Compare] Could not create the report folder. See the log file for details"
+        Clear-UILog 'Compare' "Could not create the report folder. See the log file for details" 'ERROR'
         Write-Log 'Compare' "Details: '$runReportDir': $($err.Exception.Message)" 'ERROR' -FileOnly
         Set-Busy $false
         Update-Counts
@@ -476,7 +476,7 @@ function Start-Compare {
             # Logged: the compare module already wrote the error line (e.g.
             # "Could not write the comparison data"), OnDone adds nothing.
             # DownloadSuggested: settings without a definition and no recent
-            # download -> tooltip hint on the Download button (OnDone).
+            # download (not used by OnDone at the moment).
             [PSCustomObject]@{ __type = 'status'; Success = [bool]$result.Success
                                Logged  = [bool]($result -and $result.PSObject.Properties['Logged'] -and $result.Logged)
                                DownloadSuggested = [bool]($result -and $result.PSObject.Properties['DownloadSuggested'] -and $result.DownloadSuggested) }
@@ -515,7 +515,7 @@ function Start-Compare {
         # A selection change that is still waiting for its log line (no line came after it).
         if ($AppState.compareSelectionNotePending) {
             $AppState.compareSelectionNotePending = $false
-            Write-UILog '[INFO][Compare] Policy selection changed. Disabling report and details buttons'
+            Write-UILog 'Compare' 'Policy selection changed. Disabling report and details buttons'
         }
         $ok = ($status -and $status.Success -and -not $job.Fatal)
         if ($ok) { Update-DownloadButton }
@@ -530,10 +530,10 @@ function Start-Compare {
                 $UI.btnOpenReport.IsEnabled = $false
                 $AppState.reportSelectionKey      = $null
             }
-            # Success is already logged by the report module ("[OK][Report] Created ...\Report.html ...").
+            # Success is already logged by the report module ("Created ...\Report.html ...").
         } elseif (-not $job.Fatal -and -not ($status -and $status.PSObject.Properties['Logged'] -and $status.Logged)) {
             # Not logged yet (a fatal error already says "Unexpected error").
-            Write-UILog "[ERROR][Compare] Compare failed. See the errors above"
+            Write-UILog 'Compare' "Compare failed. See the errors above" 'ERROR'
         }
         # No new report: Run Report (restored by Set-Busy) opens the previous one again.
         if (-not ($ok -and (Test-Path $AppState.reportPath))) { $AppState.reportPath = $AppState.comparePrevReportPath }
@@ -570,7 +570,7 @@ function Start-Export {
     # share a name.
     $selectedPolicies = @($items | Where-Object { $_.IsChecked -and $_.Policy } | ForEach-Object { $_.Policy })
     if ($selectedPolicies.Count -eq 0) {
-        Clear-UILog "[ERROR][Export] No $Side policies selected. Check at least one policy to export"
+        Clear-UILog 'Export' "No $Side policies selected. Check at least one policy to export" 'ERROR'
         return
     }
 
@@ -583,7 +583,7 @@ function Start-Export {
     $exportFolder = Show-FolderBrowser
     if (-not $exportFolder) { return }
     if ($exportFolder -match '^[A-Za-z]:\\?$') {
-        Clear-UILog "[ERROR][Export] Cannot export to a drive root ($exportFolder). Choose a subfolder (e.g. C:\Export)"
+        Clear-UILog 'Export' "Cannot export to a drive root ($exportFolder). Choose a subfolder (e.g. C:\Export)" 'ERROR'
         return
     }
     # JSON tenant: never into its own folder (files overwritten or duplicated).
@@ -591,14 +591,14 @@ function Start-Export {
     if ($entry -and (Get-TenantMode $entry.Node) -eq 'Offline' -and $entry.Node.path) {
         $src = $entry.Node.path.Trim().TrimEnd('\')
         if ($src -and $exportFolder.TrimEnd('\') -ieq $src) {
-            Clear-UILog "[ERROR][Export] Cannot export to the policy folder of $exportLabel itself ($exportFolder). Choose another folder"
+            Clear-UILog 'Export' "Cannot export to the policy folder of $exportLabel itself ($exportFolder). Choose another folder" 'ERROR'
             return
         }
     }
 
     Set-Busy $true -Side "${Side}Export"
     $UI.btnCompare.IsEnabled = $false
-    Clear-UILog "[INFO][Export] Exporting $($selectedPolicies.Count) of $(@($expanded).Count) $exportLabel policies..."
+    Clear-UILog 'Export' "Exporting $($selectedPolicies.Count) of $(@($expanded).Count) $exportLabel policies..."
 
     $shared = @{
         Policies      = $selectedPolicies
@@ -629,10 +629,10 @@ function Start-Export {
         Update-Counts
         $result = @($job.Output) | Select-Object -Last 1
         if ($result -and $result.Success -and -not $job.Fatal) {
-            # Success is already logged by the export module ("[OK][Export] Export completed. ...").
+            # Success is already logged by the export module ("Export completed. ...").
         } elseif (-not $job.Fatal -and -not ($result -and $result.PSObject.Properties['Logged'] -and $result.Logged)) {
             # Some policies failed (each one is in the log above).
-            Write-UILog "[ERROR][Export] Export failed"
+            Write-UILog 'Export' "Export failed" 'ERROR'
         }
     } -Context @{ Type = 'Export'; Side = "${Side}Export" }
 }
@@ -654,7 +654,7 @@ function Start-DefinitionPreload {
     $what = if ($defs.Exists -and $cats.Exists) { 'setting and category definitions' }
             elseif ($defs.Exists)               { 'setting definitions' }
             else                                { 'category definitions' }
-    Write-UILog "[INFO][Definitions] Loading $what..."
+    Write-UILog 'Definitions' "Loading $what..."
 
     # The dots of that line cycle (. .. ...) every 0.6 s (timer below) and end
     # as plain "...". Best effort: without the run nothing animates.
@@ -678,7 +678,7 @@ function Start-DefinitionPreload {
     $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
     $rs.ApartmentState = 'STA'
     $rs.Open()
-    $queue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $queue = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
     $rs.SessionStateProxy.SetVariable('LogQueue', $queue)
     $rs.SessionStateProxy.SetVariable('Shared', @{
         ModulesPath = $AppState.ModulesPath
@@ -697,7 +697,7 @@ function Start-DefinitionPreload {
         if ($S.DefsExists) {
             try {
                 $defLookup = Import-SettingDefinitions -Path $S.DefsPath
-                Write-Log 'Definitions' "Cached $($defLookup.Count) setting definitions from $($S.DefsName)" 'OK'
+                Write-Log 'Definitions' "Cached $($defLookup.Count) setting definitions from $($S.DefsName)"
             } catch {
                 $defLookup = $null
                 Write-Log 'Definitions' "Could not read setting definitions. Display names will not be resolved" 'WARN'
@@ -708,7 +708,7 @@ function Start-DefinitionPreload {
         if ($S.CatsExists) {
             try {
                 $catMap = Import-SettingCategories -Path $S.CatsPath
-                Write-Log 'Categories' "Cached $($catMap.Count) category definitions from $($S.CatsName)" 'OK'
+                Write-Log 'Categories' "Cached $($catMap.Count) category definitions from $($S.CatsName)"
             } catch {
                 $catMap = $null
                 Write-Log 'Categories' "Could not read category definitions. Categories will not be resolved" 'WARN'
@@ -734,9 +734,9 @@ function Start-DefinitionPreload {
             try { $a.Run.Text = $a.Base + ('.' * $dots) } catch {}
             if ($done) { $AppState.DefinitionPreloadAnim = $null }
         }
-        $sb = [System.Text.StringBuilder]::new(); $item = $null
-        while ($p.Queue.TryDequeue([ref]$item)) { [void]$sb.Append($item).Append("`n") }
-        if ($sb.Length -gt 0) { Add-UILogLines $sb.ToString() }
+        $batch = [System.Collections.Generic.List[object]]::new(); $item = $null
+        while ($p.Queue.TryDequeue([ref]$item)) { $batch.Add($item) }
+        if ($batch.Count -gt 0) { Add-UILogLines $batch.ToArray() }
         if (-not $done) { return }
 
         $p.Timer.Stop()
@@ -776,7 +776,7 @@ function Start-DefinitionDownload {
 
     $entry = Get-TenantEntry $pickedKey
     if (-not $entry -or (Get-TenantMode $entry.Node) -ne 'Online') {
-        Clear-UILog "[ERROR][Download] Download needs an API tenant (ClientSecret or Certificate)"
+        Clear-UILog 'Download' "Download needs an API tenant (ClientSecret or Certificate)" 'ERROR'
         return
     }
 
@@ -850,9 +850,9 @@ function Start-DefinitionDownload {
                 $defCache.CategoryById = $cacheOut.catMap
                 $defCache.HasCats      = $true
             }
-            # Success is already logged by the load module ("[OK][Download] Download complete.").
+            # Success is already logged by the load module ("Download complete").
         } elseif (-not $job.Fatal -and -not ($result -and $result.PSObject.Properties['Logged'] -and $result.Logged)) {
-            Write-UILog "[ERROR][Download] Download failed"
+            Write-UILog 'Download' "Download failed" 'ERROR'
         }
         # Icon-only when both files are on disk now, the label after a failure.
         Update-DownloadButton
@@ -864,7 +864,7 @@ function Start-DefinitionDownload {
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
 # Wires the Load / Compare / Export / Download / View Report buttons.
-# Called once from BasetuneUI.ps1.
+# Called once from Basetune.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-BasetuneActions {
     $UI.btnSourceLoad.Add_Click({

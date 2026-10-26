@@ -8,27 +8,43 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging — Write-Log with optional GUI callback (Set-LogCallback)
 #
-# Three sinks:
-#   - CLI:         no callback set → Write-Host with colour
-#   - UI runspace: callback enqueues to a ConcurrentQueue, drained by a
-#                  DispatcherTimer on the UI thread
-#   - File:        when Set-LogFile set a path, every message is also
+# Every message is a log entry (New-LogEntry): Level, Label, Message. The
+# sinks read the fields; nothing builds or parses a "[LEVEL][Label] message"
+# string. Three sinks:
+#   - CLI:         no callback set → Write-Host (WARN / ERROR in colour)
+#   - UI runspace: callback enqueues the entry to a ConcurrentQueue, drained
+#                  by a DispatcherTimer on the UI thread (Add-UILogLines)
+#   - File:        when Set-LogFile set a path, every entry is also
 #                  appended there (best-effort, never throws)
 # ─────────────────────────────────────────────────────────────────────────────
+
+# The log levels: INFO (progress, results, everything else), WARN, ERROR.
+# Write-Log, Write-UILog, Clear-UILog and New-LogEntry validate against them.
+# A new level also needs its colour in Write-Log, the log view
+# (Add-UILogLines) and its CMTrace type (ConvertTo-CMTraceLine).
+
+# One log entry. Label = the area the message is about (Compare, Source,
+# Config, ...): the Component column in CMTrace, not shown in the log view or
+# the console.
+function New-LogEntry {
+    param([string]$Label, [string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO')
+    return [pscustomobject]@{ Level = $Level; Label = $Label; Message = $Message }
+}
 
 $script:LogCallback = $null
 $script:LogFile     = $null
 $script:LogSource   = ''      # 'UI' or 'CLI' (Set-LogFile -Source): CMTrace file field, shown as "Source" in the detail pane
 
-# One line to the log file. UI, its runspaces, the parallel load workers and
-# the CLI (another process) all write Logs\Basetune.log, so a named mutex
-# serialises the writes (same Windows session; no 'Global\' prefix needed),
-# and a busy file gets a few short retries instead of losing the line.
-# Best-effort: never throws.
+# One log entry (New-LogEntry) to the log file. UI, its runspaces, the
+# parallel load workers and the CLI (another process) all write
+# Logs\Basetune.log, so a named mutex serialises the writes (same Windows
+# session; no 'Global\' prefix needed), and a busy file gets a few short
+# retries instead of losing the line. An entry without text (the separator
+# line) is skipped. Best-effort: never throws.
 function Add-LogFileLine {
-    param([string]$Path, [string]$Line, [string]$Source = $script:LogSource)
-    if (-not $Path -or -not $Line) { return }
-    $text = (ConvertTo-CMTraceLine $Line -Source $Source) + "`r`n"
+    param([string]$Path, $Entry, [string]$Source = $script:LogSource)
+    if (-not $Path -or -not $Entry -or [string]::IsNullOrWhiteSpace($Entry.Message)) { return }
+    $text = (ConvertTo-CMTraceLine $Entry -Source $Source) + "`r`n"
     $mx = $null; $owned = $false
     try {
         $mx = [System.Threading.Mutex]::new($false, 'Basetune_LogFile')
@@ -48,7 +64,7 @@ function Add-LogFileLine {
 
 function Get-LogSource { return $script:LogSource }
 
-# The Basetune version ("3.0.0"): ModuleVersion of BasetuneCore.psd1 (next to
+# The Basetune version ("3.0.1"): ModuleVersion of BasetuneCore.psd1 (next to
 # this file), read once. The manifest is the one place to change it.
 $script:BasetuneVersion = $null
 function Get-BasetuneVersion {
@@ -62,48 +78,48 @@ function Get-BasetuneVersion {
 }
 
 function Write-Log {
-    param([string]$Label, [string]$Message, [string]$Level = "INFO", [switch]$FileOnly)
+    param([string]$Label, [string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO', [switch]$FileOnly)
 
-    # Write-Log '' '' → an empty separator line in the log view.
-    $formatted = if (-not $Label -and -not $Message) { '' } else { "[$Level][$Label] $Message" }
+    # Write-Log '' '' → an empty entry: a blank line on the console, nothing
+    # in the log view or the log file.
+    $entry = New-LogEntry $Label $Message $Level
 
     # Log file, if set: CMTrace format (ConvertTo-CMTraceLine), best-effort.
-    if ($script:LogFile -and $formatted) {
-        Add-LogFileLine -Path $script:LogFile -Line $formatted
+    if ($script:LogFile) {
+        Add-LogFileLine -Path $script:LogFile -Entry $entry
     }
     # -FileOnly: technical detail for the log file, not for the log view/console.
     if ($FileOnly) { return }
 
-    # If a GUI callback is set, forward there (no console output from runspaces)
+    # If a GUI callback is set, forward the entry there (no console output
+    # from runspaces).
     if ($script:LogCallback) {
-        & $script:LogCallback $formatted
+        & $script:LogCallback $entry
         return
     }
 
-    $color = switch ($Level) {
-        "INFO"  { "Cyan" }
-        "OK"    { "Green" }
-        "WARN"  { "Yellow" }
-        "ERROR" { "Red" }
-        default { "White" }
+    # Console (CLI): only the message, like the UI log view. WARN and ERROR in
+    # colour, INFO in the console's own colour. The log file keeps the label
+    # (CMTrace Component).
+    switch ($Level) {
+        'WARN'  { Write-Host $Message -ForegroundColor Yellow }
+        'ERROR' { Write-Host $Message -ForegroundColor Red }
+        default { Write-Host $Message }
     }
-
-    # Console (CLI): only the message, like the UI log view; the colour shows
-    # the level. The log file keeps [LEVEL][Label] (CMTrace columns).
-    Write-Host $Message -ForegroundColor $color
 }
 
+# The callback gets one log entry (New-LogEntry) per Write-Log call.
 function Set-LogCallback {
     param([scriptblock]$Callback)
     $script:LogCallback = $Callback
 }
 
 # Log setup at the start of a UI background runspace (after it imports
-# BasetuneCore.psd1): every Write-Log line goes to the runspace's queue (the
+# BasetuneCore.psd1): every Write-Log entry goes to the runspace's queue (the
 # UI drains it into the log view) and, with a path, also to the log file.
 function Set-RunspaceLogging {
     param([Parameter(Mandatory)]$Queue, [string]$LogFile, [string]$Source = 'UI')
-    Set-LogCallback ({ param($msg) $Queue.Enqueue($msg) }.GetNewClosure())
+    Set-LogCallback ({ param($entry) $Queue.Enqueue($entry) }.GetNewClosure())
     if ($LogFile) { try { Set-LogFile -Path $LogFile -Source $Source } catch {} }
 }
 function Set-LogFile {
@@ -152,23 +168,18 @@ function Set-LogFile {
 # ─────────────────────────────────────────────────────────────────────────────
 # CMTrace log line
 #
-# "[LEVEL][Label] message" -> CMTrace / ConfigMgr log format, so Logs\*.log
-# opens in CMTrace with columns (Log Text, Component, Date/Time, Thread) and
-# colouring: ERROR -> type 3 (red), WARN -> type 2 (yellow), INFO/OK -> 1.
-# A line without the prefix: component "Basetune", type 1.
+# A log entry (New-LogEntry) -> CMTrace / ConfigMgr log format, so
+# Logs\*.log opens in CMTrace with columns (Log Text, Component, Date/Time,
+# Thread) and colouring: ERROR -> type 3 (red), WARN -> type 2 (yellow),
+# INFO -> 1. Component = the label ("Basetune" when it has none).
 # Time bias = minutes to add to local time for UTC (ConfigMgr convention,
 # e.g. -120 for UTC+2).
 # ─────────────────────────────────────────────────────────────────────────────
 function ConvertTo-CMTraceLine {
-    param([string]$Line, [string]$Component = 'Basetune', [string]$Source = '')
-    $level = ''
-    $msg   = $Line
-    if ($Line -match '^\[(?<lvl>[A-Za-z]+)\]\[(?<comp>[^\]]*)\]\s?(?<msg>.*)$') {
-        $level = $Matches['lvl'].ToUpperInvariant()
-        if ($Matches['comp']) { $Component = $Matches['comp'] }
-        $msg = $Matches['msg']
-    }
-    $type = switch ($level) { 'ERROR' { 3 } 'WARN' { 2 } default { 1 } }
+    param([Parameter(Mandatory)]$Entry, [string]$Source = '')
+    $msg       = [string]$Entry.Message
+    $Component = if ($Entry.Label) { [string]$Entry.Label } else { 'Basetune' }
+    $type = switch ($Entry.Level) { 'ERROR' { 3 } 'WARN' { 2 } default { 1 } }
     $now  = Get-Date
     $bias = -[int][System.TimeZoneInfo]::Local.GetUtcOffset($now).TotalMinutes
     $time = $now.ToString('HH:mm:ss.fff') + $bias.ToString('+0;-0;+0')
@@ -619,6 +630,7 @@ Export-ModuleMember -Function @(
     'Set-ProcessPowerThrottling',
     'Add-LogFileLine',
     'Get-LogSource',
+    'New-LogEntry',
     'Write-Log',
     'Set-LogCallback',
     'Set-RunspaceLogging',
