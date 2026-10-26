@@ -1,0 +1,248 @@
+    :root {
+        --primary-blue: #1a6ef5;
+        --primary-blue-hover: #1662d9;
+        --primary-orange: #f0a340;
+        --bg-body: #f0f4f8;
+        --bg-card: white;
+        --text-main: #1a1a1a;
+        --text-sub: #666;
+        --border-color: #eef1f6;
+        --card-shadow: 0 4px 20px rgba(0,0,0,0.05);
+        --status-match-bg: #16a34a;   --status-match-text: #ffffff;
+        --status-diff-bg: #f0a340;    --status-diff-text: #ffffff;
+        --status-missing-bg: #1a6ef5; --status-missing-text: #ffffff;
+        --status-extra-bg: #8b5cf6;   --status-extra-text: #ffffff;
+        --issue-conflict-bg: #dc2626; --issue-conflict-text: #ffffff;
+        --issue-duplicate-bg: #9aa3ae;--issue-duplicate-text: #ffffff;
+        --logo-bg: #e8f0fe;
+    }
+    body.dark-mode {
+        --bg-body: #0f1115;
+        --bg-card: #1a1d23;
+        --text-main: #f0f2f5;
+        --text-sub: #a0a6b1;
+        --border-color: #2d323a;
+        --card-shadow: 0 4px 25px rgba(0,0,0,0.3);
+        --logo-bg: #23272e;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Keep the space for the scrollbar, also when the page fits on the
+       screen. Without this the centred content jumps half a scrollbar width
+       as soon as a filter leaves few rows: with Conflict the bar disappears,
+       the viewport gets wider and everything shifts to the right.
+       scrollbar-gutter is the clean fix; the overflow-y: scroll above it is
+       the fallback for browsers that do not support it yet. */
+    html { overflow-y: scroll; }
+    @supports (scrollbar-gutter: stable) {
+        html { overflow-y: auto; scrollbar-gutter: stable; }
+    }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: var(--bg-body);
+        color: var(--text-main);
+        padding: 40px 20px;
+        display: flex; flex-direction: column; align-items: center;
+        transition: background-color 0.3s, color 0.3s;
+    }
+    .theme-toggle {
+        position: fixed; top: 20px; right: 20px;
+        background: var(--bg-card); border: 1px solid var(--border-color);
+        padding: 10px; border-radius: 50%; cursor: pointer;
+        box-shadow: var(--card-shadow); display: flex; align-items: center;
+        transition: all 0.2s ease; z-index: 1000;
+    }
+    .theme-toggle svg { width: 20px; height: 20px; fill: var(--text-main); }
+    .sun-icon { display: none; }
+    .dark-mode .sun-icon { display: block; }
+    .dark-mode .moon-icon { display: none; }
+    /* Follows the window width up to 2400px (4K at 150% = 2560px, 34" ultrawide = 3440px):
+       wider than that, a row gets too long to read. */
+    .container { max-width: 2400px; width: 100%; }
+    header { margin-bottom: 32px; padding-top: 8px; }
+    h1 { font-size: 28px; font-weight: 600; margin: 10px 0 6px; letter-spacing: -0.8px; }
+    .subtitle { font-size: 15px; color: var(--text-main); margin-bottom: 28px; }
+    .blue-text { color: var(--primary-blue); font-weight: 600; }
+
+    /* Tiles and filter bar share one 7-column grid, so the filters line up
+       with the tiles: Search under Total+Match, Status under Diff, Issue
+       under Missing, Platform under Extra, Policy under Duplicate+Conflict. */
+    .stats-grid, .filters {
+        display: grid; grid-template-columns: repeat(7, 132px); gap: 12px;
+    }
+    .stats-grid { margin-bottom: 28px; }
+    .stat-card {
+        background: var(--bg-card); border: 1px solid var(--border-color);
+        border-radius: 12px; padding: 16px 20px; min-width: 0;
+        box-shadow: var(--card-shadow); cursor: pointer;
+        transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .stat-card:hover { border-color: var(--primary-blue); box-shadow: 0 4px 20px rgba(26,110,245,0.12); }
+    .stat-card.active { border-color: var(--primary-blue); box-shadow: 0 4px 20px rgba(26,110,245,0.18); }
+    /* Keyboard (Tab): same look as hover; no focus ring after a mouse click. */
+    .stat-card:focus { outline: none; }
+    .stat-card:focus-visible { border-color: var(--primary-blue); box-shadow: 0 4px 20px rgba(26,110,245,0.12); }
+    .stat-card .s-label {
+        font-size: 11px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.8px; color: var(--text-sub); margin-bottom: 6px;
+    }
+    .stat-card .s-value { font-size: 28px; font-weight: 700; letter-spacing: -1px; line-height: 1; }
+    .stat-card.s-total   .s-value { color: var(--text-main); }
+    .stat-card.s-match   .s-value { color: #16a34a; }
+    .stat-card.s-diff    .s-value { color: #f0a340; }
+    .stat-card.s-missing .s-value { color: var(--primary-blue); }
+    .stat-card.s-extra   .s-value { color: #8b5cf6; }
+    .stat-card.s-dup     .s-value { color: #9aa3ae; }
+    .stat-card.s-conflict .s-value { color: #dc2626; }
+
+    .filters { margin-bottom: 16px; align-items: center; }
+    .filters > * { width: 100%; min-width: 0; }
+    #search { grid-column: span 2; }
+    #filterPolicy { grid-column: span 2; }
+    /* Narrow window: fall back to wrapping boxes. */
+    @media (max-width: 900px) {
+        .stats-grid, .filters { display: flex; flex-wrap: wrap; }
+        .stat-card { min-width: 100px; }
+        .filters > * { width: auto; }
+        #search { width: 260px; }
+    }
+    .filters input[type=text] {
+        background: var(--bg-card); border: 1px solid var(--border-color);
+        border-radius: 8px; color: var(--text-main);
+        font-size: 13px; padding: 8px 14px; outline: none;
+        transition: border-color 0.2s;
+    }
+    .filters input[type=text]:focus { border-color: var(--primary-blue); }
+    .filters select {
+        background: var(--bg-card); border: 1px solid var(--border-color);
+        border-radius: 8px; color: var(--text-main);
+        font-size: 13px; padding: 8px 14px; outline: none; cursor: pointer;
+    }
+    .filters select:focus-visible { border-color: var(--primary-blue); }
+    #filterPolicy { text-overflow: ellipsis; }
+    .row-count { font-size: 12px; color: var(--text-sub); margin-bottom: 10px; }
+
+    .content-card {
+        background: var(--bg-card); border-radius: 16px;
+        box-shadow: var(--card-shadow); border: 1px solid var(--border-color);
+        overflow: hidden;
+    }
+    /* overflow-y hidden: the table never needs its own vertical scrollbar
+       (the page scrolls); without it a 1px rounding difference could show one. */
+    .table-wrapper { overflow-x: auto; overflow-y: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+        text-align: left; padding: 14px 15px; color: var(--text-sub);
+        background-color: var(--bg-card); border-bottom: 1px solid var(--border-color);
+        font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;
+        font-size: 11px; white-space: nowrap; cursor: pointer; user-select: none;
+    }
+    th:hover { color: var(--primary-blue); }
+    th .sort-indicator { margin-left: 4px; opacity: 0.4; font-size: 10px; }
+    th.sorted-asc .sort-indicator::after  { content: '▲'; opacity: 1; }
+    th.sorted-desc .sort-indicator::after { content: '▼'; opacity: 1; }
+    td { padding: 11px 15px; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background-color: rgba(26,110,245,0.02); }
+
+    .col-policy { color: var(--text-sub); font-size: 12px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+    .col-setting { max-width: 460px; }
+    .col-value { color: var(--text-sub); font-size: 12px; max-width: 220px; word-break: break-word; white-space: normal; }
+
+    /* Status + Issue columns: fixed width so badges never shift the layout */
+    .col-status { width: 110px; white-space: nowrap; }
+    .col-issue  { width: 130px; white-space: nowrap; }
+
+    .badge {
+        display: inline-block; padding: 3px 0; border-radius: 999px;
+        font-size: 11px; font-weight: 600;
+        width: 100px; text-align: center;
+    }
+    .val-match     { background: var(--status-match-bg);    color: var(--status-match-text); }
+    .val-diff      { background: var(--status-diff-bg);     color: var(--status-diff-text); }
+    .val-missing   { background: var(--status-missing-bg);  color: var(--status-missing-text); }
+    .val-extra     { background: var(--status-extra-bg);    color: var(--status-extra-text); }
+    .val-conflict  { background: var(--issue-conflict-bg);  color: var(--issue-conflict-text); }
+    .val-duplicate { background: var(--issue-duplicate-bg); color: var(--issue-duplicate-text); }
+    .none-text {
+        display: inline-block; width: 100px; text-align: center;
+        padding: 3px 0; border-radius: 6px;
+        font-size: 11px; font-weight: 500; color: var(--text-sub);
+        opacity: 0.6;
+    }
+
+    tr.main-row { cursor: pointer; }
+    tr.main-row:hover td { background-color: rgba(26,110,245,0.04); }
+    tr.main-row.expanded td { background-color: rgba(26,110,245,0.04); border-bottom: none; }
+    .expand-icon { display: inline-flex; align-items: center; margin-right: 7px; color: var(--text-sub); transition: transform 0.2s; line-height: 1; vertical-align: middle; }
+    tr.main-row.expanded .expand-icon { transform: rotate(90deg); }
+
+    /* Detail rows are rows of the main table (not a nested table), so the
+       Target Value column always starts under Source Value, whatever the
+       length of the policy names or values. */
+    tr.detail-row td {
+        background-color: rgba(26,110,245,0.02);
+        border-bottom: none;
+        padding: 2px 15px; font-size: 12px; line-height: 1.4; color: var(--text-sub);
+        vertical-align: top;
+        word-break: break-word;
+    }
+    tr.detail-row.hidden { display: none; }
+    /* Hover on one target line (policy + value): same colour as the hover
+       on a main row, so the matching value is easy to follow. */
+    tr.detail-row:hover td { background-color: rgba(26,110,245,0.02); }
+    tr.detail-row.dt-item:hover td { background-color: rgba(26,110,245,0.04); }
+    tr.detail-row td.dt-policy { padding-left: 34px; }
+    tr.detail-row.dt-head td {
+        padding-top: 10px; padding-bottom: 4px; font-size: 10px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.6px;
+    }
+    tr.detail-row.dt-last td { border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+    /* Empty closing row after the targets: holds the bottom spacing and
+       border, so every target line (also the last) has the same height. */
+    tr.detail-row.dt-end td { padding: 0; height: 8px; border-bottom: 1px solid var(--border-color); }
+
+    /* Resizable columns: drag a column border anywhere in the table.
+       Double-click it to reset. */
+    #mainTable th { position: relative; }
+    .col-resizer {
+        position: absolute; top: 0; right: 0; width: 7px; height: 100%;
+        user-select: none; z-index: 1; pointer-events: none;
+    }
+    .col-resizer::after {
+        content: ''; position: absolute; top: 25%; bottom: 25%; right: 3px;
+        width: 1px; background: var(--border-color);
+    }
+    .col-resizer:hover::after, .col-resizer.active::after { background: var(--primary-blue); width: 2px; }
+    #mainTable.resized { table-layout: fixed; }
+    #mainTable.resized td.col-policy,
+    #mainTable.resized td.col-setting,
+    #mainTable.resized td.col-value { max-width: none; }
+    /* Fixed layout: long words wrap inside their own column instead of
+       running into the next one; header text is cut off with "...". */
+    #mainTable.resized td { overflow-wrap: anywhere; }
+    #mainTable.resized th { overflow: hidden; text-overflow: ellipsis; }
+    /* Near a draggable border (or while dragging) the cursor becomes the
+       left-right arrow everywhere, also over rows and headers that normally
+       show the hand cursor. */
+    #mainTable.near-border, #mainTable.near-border *,
+    body.col-resizing, body.col-resizing * { cursor: ew-resize !important; }
+    body.col-resizing, body.col-resizing * { user-select: none !important; }
+    tr.detail-row td.dt-empty { padding: 10px 15px 12px 34px; font-style: italic; }
+
+    .pagination {
+        display: flex; align-items: center; gap: 6px;
+        padding: 14px 16px; border-top: 1px solid var(--border-color);
+        flex-wrap: wrap;
+    }
+    .pagination button {
+        background: var(--bg-card); border: 1px solid var(--border-color);
+        color: var(--text-main); border-radius: 6px; padding: 5px 11px;
+        font-size: 12px; cursor: pointer; transition: all 0.15s;
+    }
+    .pagination button:hover:not(:disabled) { border-color: var(--primary-blue); color: var(--primary-blue); }
+    .pagination button:disabled { opacity: 0.35; cursor: default; }
+    .pagination button.active { background: var(--primary-blue); color: #fff; border-color: var(--primary-blue); }
+    .pagination .page-info { font-size: 12px; color: var(--text-sub); margin-left: auto; }
+
+    footer { text-align: center; color: var(--text-sub); font-size: 12px; padding: 40px 0; opacity: 0.7; }

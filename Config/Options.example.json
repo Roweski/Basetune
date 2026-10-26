@@ -1,0 +1,8 @@
+{
+  "reportPath": "C:\\Reports",
+  "platforms": [
+    "windows"
+  ],
+  "theme": "dark",
+  "maxThreads": 8
+}

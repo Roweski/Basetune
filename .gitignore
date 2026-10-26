@@ -1,0 +1,11 @@
+Config/Config.json
+Config/Options.json
+
+Definitions/settingDefinitions.json
+Definitions/settingCategories.json
+
+# Logs en rapporten, mappen blijven via .gitkeep
+Logs/*
+!Logs/.gitkeep
+Reports/*
+!Reports/.gitkeep
