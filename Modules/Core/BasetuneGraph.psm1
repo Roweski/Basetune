@@ -128,22 +128,26 @@ function script:Get-TokenViaCertificate {
 function New-GraphConnection {
     param(
         [Parameter(Mandatory)]$Config,
-        [Parameter(Mandatory)][string]$Label
+        [Parameter(Mandatory)][string]$Label,
+        # Level of the "Cannot connect" / "Could not authenticate" lines: ERROR
+        # when the action stops (load, export, download, token refresh), WARN
+        # for the test on Save in Tenant Configuration (the save goes on).
+        [ValidateSet('WARN', 'ERROR')][string]$FailLevel = 'ERROR'
     )
 
     $authMethod = Get-NodeValue $Config 'authMethod'
     $tenantId   = Get-NodeValue $Config 'tenantId'
     $clientId   = Get-NodeValue $Config 'clientId'
 
-    # Offline (JSON) tenants and unknown auth methods: say so explicitly
+    # Offline baselines and unknown auth methods: say so explicitly
     # instead of the generic "no response" below.
     if ($authMethod -notin @('ClientSecret', 'Certificate')) {
         $shown = if ($authMethod) { $authMethod } else { 'None' }
-        Write-Log $Label "Cannot connect: authMethod '$shown' is not an API method (ClientSecret or Certificate)" "WARN"
+        Write-Log $Label "Cannot connect: authMethod '$shown' is not valid for an online tenant (ClientSecret or Certificate)" $FailLevel
         return $null
     }
     if (-not $tenantId -or -not $clientId) {
-        Write-Log $Label "Cannot connect: tenantId or clientId is missing in the configuration" "WARN"
+        Write-Log $Label "Cannot connect: tenantId or clientId is missing in the configuration" $FailLevel
         return $null
     }
 
@@ -154,12 +158,12 @@ function New-GraphConnection {
     if ($authMethod -eq 'ClientSecret') {
         $storedSecret = [string](Get-NodeValue $Config 'clientSecret')
         if (-not $storedSecret) {
-            Write-Log $Label "Cannot connect: clientSecret is empty. Enter it in Tenant Configuration" "WARN"
+            Write-Log $Label "Cannot connect: clientSecret is empty. Enter it in Tenant Configuration" $FailLevel
             return $null
         }
         $secret = Unprotect-Secret $storedSecret
         if (-not $secret) {
-            Write-Log $Label "Could not decrypt the client secret (encrypted by another Windows user or on another PC). Re-enter the secret in Tenant Configuration" "ERROR"
+            Write-Log $Label "Could not decrypt the Client Secret (encrypted by another Windows user or on another PC). Re-enter the secret in Tenant Configuration" "ERROR"
             return $null
         }
     }
@@ -178,24 +182,24 @@ function New-GraphConnection {
         }
     }
     catch {
-        Write-Log $Label "Could not sign in to the tenant. Check the tenant credentials" "WARN"
-        Write-Log $Label "Details: $($_.Exception.Message)" "WARN" -FileOnly
+        Write-Log $Label "Could not authenticate with Microsoft Graph. See Basetune.log for details" $FailLevel
+        Write-Log $Label "Details: $($_.Exception.Message)" $FailLevel -FileOnly
         return $null
     }
 
     # Guard: token may be null or an OAuth error object (no exception thrown by Invoke-RestMethod)
     if (-not $token) {
-        Write-Log $Label "Could not sign in to the tenant: no response. Check the tenant credentials" "WARN"
+        Write-Log $Label "Could not authenticate with Microsoft Graph: no response. Check the tenant credentials" $FailLevel
         return $null
     }
     if ($token.PSObject.Properties['error'] -and $token.error) {
         $errDesc = if ($token.PSObject.Properties['error_description'] -and $token.error_description) { $token.error_description } else { $token.error }
-        Write-Log $Label "Could not sign in to the tenant. Check the tenant credentials" "WARN"
-        Write-Log $Label "Details: $errDesc" "WARN" -FileOnly
+        Write-Log $Label "Could not authenticate with Microsoft Graph. See Basetune.log for details" $FailLevel
+        Write-Log $Label "Details: $errDesc" $FailLevel -FileOnly
         return $null
     }
     if (-not ($token.PSObject.Properties['access_token']) -or -not $token.access_token) {
-        Write-Log $Label "Could not sign in to the tenant: no access token in the response" "WARN"
+        Write-Log $Label "Could not authenticate with Microsoft Graph: no access token in the response" $FailLevel
         return $null
     }
 
@@ -209,13 +213,52 @@ function New-GraphConnection {
         ClientId    = $clientId
         AccessToken = $token.access_token
         ExpiresAt   = $expiresAt
+        # The tenant settings this token was made with (Get-GraphConnection
+        # reuses it only while they are unchanged).
+        Fingerprint = Get-GraphConfigFingerprint $Config
         _Config     = $Config
     }
 }
 
+# The sign-in fields of a tenant entry as one string: authMethod, tenantId,
+# clientId, clientSecret (as stored, encrypted) and certThumbprint. A Save in
+# Tenant Configuration that changes any of them (also a re-entered secret:
+# the encrypted value changes) gives another fingerprint.
+function script:Get-GraphConfigFingerprint {
+    param($Config)
+    (@('authMethod', 'tenantId', 'clientId', 'clientSecret', 'certThumbprint') |
+        ForEach-Object { [string](Get-NodeValue $Config $_) }) -join "`n"
+}
+
+# A Graph connection for a tenant: the one from an earlier sign-in (UI: the
+# last Load or Download of that tenant) while its token is valid for at least
+# 5 more minutes and the tenant's sign-in fields are unchanged; otherwise a
+# new sign-in (New-GraphConnection, same parameters). One sign-in per token
+# instead of one per action, also in the Entra sign-in logs. The reused
+# connection is a copy with this action's Label (its log lines).
+function Get-GraphConnection {
+    param(
+        [Parameter(Mandatory)]$Config,
+        [Parameter(Mandatory)][string]$Label,
+        $Cached = $null,
+        [ValidateSet('WARN', 'ERROR')][string]$FailLevel = 'ERROR'
+    )
+    if ($Cached -and $Cached.PSObject.Properties['Fingerprint'] -and $Cached.ExpiresAt -and
+        $Cached.Fingerprint -ceq (Get-GraphConfigFingerprint $Config) -and
+        $Cached.ExpiresAt -gt (Get-Date).AddMinutes(5)) {
+        $conn = $Cached.PSObject.Copy()
+        $conn.Label = $Label
+        Write-Log $Label "Using the current sign-in. Access valid until $($conn.ExpiresAt.ToString('HH:mm:ss'))"
+        return $conn
+    }
+    return New-GraphConnection -Config $Config -Label $Label -FailLevel $FailLevel
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Token check — returns a NEW connection object if the token has expired.
-# Connections are immutable; this function never mutates the input object.
+# Connections are immutable; this function never mutates the input object,
+# so a caller that makes several requests keeps the returned one (e.g.
+# Resolve-Category): otherwise every request signs in again.
 # ─────────────────────────────────────────────────────────────────────────────
 
 function script:Update-GraphConnection {
@@ -372,9 +415,9 @@ function Invoke-IntuneGraphRequest {
             if ($status -in @(500, 502, 504) -and $retry -lt ($MaxRetries - 1)) {
                 $wait = [math]::Pow(2, $retry + 1)   # 2s, 4s …
                 $retry++
-                # 504 = Graph too slow (the definition download returns the
-                # whole catalog in one response); worded calmly.
-                $what = if ($status -eq 504) { 'Graph is slow to respond (HTTP 504)' } else { "Server error (HTTP $status)" }
+                # 504 = Graph gateway timeout (the definition download returns
+                # the whole catalog in one response).
+                $what = if ($status -eq 504) { 'Microsoft Graph request timed out (HTTP 504)' } else { "Server error (HTTP $status)" }
                 Write-Log $conn.Label "$what. Retrying in $wait sec... [$retry/$($MaxRetries - 1)]" "WARN"
                 Start-Sleep -Seconds $wait
                 continue
@@ -448,10 +491,12 @@ function Get-GraphPagedResults {
         # more retries than the default.
         [int]$MaxRetries = 3,
         [int]$TimeoutSec = $script:RequestTimeoutSec,
-        # -Quiet: no "Fetching... (n items so far)" / "Fetched items (n)" lines;
-        # the caller logs its own result (policy load: "Fetched 47 policies
-        # from Graph API"). The definition download keeps them.
-        [switch]$Quiet
+        # -Quiet: no "Fetching... (n <ItemName> so far)" / "Fetched <ItemName>
+        # (n)" lines; the caller logs its own result (policy load: "Fetched 47
+        # policies from Graph API"). The definition download and the export
+        # keep them, with their own ItemName ("setting definitions", ...).
+        [switch]$Quiet,
+        [string]$ItemName = 'items'
     )
 
     $results = [System.Collections.Generic.List[object]]::new()
@@ -471,10 +516,10 @@ function Get-GraphPagedResults {
         $nextProp = $response.PSObject.Properties['@odata.nextLink']
         $next = if ($nextProp) { $nextProp.Value } else { $null }
         # Only while more pages follow (else the count shows twice).
-        if (-not $Quiet -and $next) { Write-Log $conn.Label "Fetching... ($($results.Count) items so far)" }
+        if (-not $Quiet -and $next) { Write-Log $conn.Label "Fetching... ($($results.Count) $ItemName so far)" }
     }
 
-    if (-not $Quiet) { Write-Log $conn.Label "Fetched items ($($results.Count))" }
+    if (-not $Quiet) { Write-Log $conn.Label "Fetched $ItemName ($($results.Count))" }
     return $results
 }
 
@@ -484,6 +529,8 @@ function Get-GraphPagedResults {
 
 Export-ModuleMember -Function @(
     'New-GraphConnection',
+    'Get-GraphConnection',
+    'Update-GraphConnection',
     'Invoke-IntuneGraphRequest',
     'Test-GraphNetworkError',
     'Test-GraphReachable',

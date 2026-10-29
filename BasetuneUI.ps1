@@ -114,6 +114,9 @@ $AppState.sourceExpanded   = $null
 $AppState.targetExpanded   = $null
 $AppState.sourceConnection = $null
 $AppState.targetConnection = $null
+# Last Graph sign-in per tenant id (Load, Download), reused by the next one
+# while the token is valid and the tenant unchanged (Get-GraphConnection).
+$AppState.graphConnections = @{}
 
 # ── Definition cache ─────────────────────────────────────────────────────────
 # In-memory lookup of Settings Catalog definitions + categories. Filled by the
@@ -164,6 +167,11 @@ $AppState.CurrentJob = $null
 # Compare's OnDone overrides it when a fresh report is produced.
 $AppState.btnOpenReportPriorState = $null
 
+# Last startup line ("Click the gear icon ..." / "Ready to load policies"),
+# written once the definition preload is done (Start-DefinitionPreload), so it
+# comes after the definitions lines; right away when nothing is preloaded.
+$AppState.startupLastLine = $null
+
 # ── Build window from XAML file ───────────────────────────────────────────────
 try {
     $UI.Window = Import-Xaml -Path "$($AppState.XamlPath)\BasetuneUI.xaml" -Width 1400 -Height 1000
@@ -211,7 +219,7 @@ Initialize-BasetuneJobs
 
 # ── Observable collections ────────────────────────────────────────────────────
 $AppState.sourceItems = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
-# Load filter per side that last gave "No policies match the filter" (see Reset-Side).
+# Load filter per side that last gave "No policies match the selected filters" (see Reset-Side).
 $AppState.noMatchLoadFilter = @{ Source = $null; Target = $null }
 $AppState.targetItems = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 # Sort per list (column headers Policy / Platform), see Set-ListSort.
@@ -271,38 +279,52 @@ Update-ExportButtons
 Update-EmptyState 'Source'; Update-EmptyState 'Target'
 
 $UI.Window.Add_Loaded({
-    # No tenants (first start, or emptied): one line, before the definitions
-    # lines. Not when Config.json is invalid or unreadable (the error line says
-    # why). Creating Config.json / Options.json is in the log file only.
-    if (@($AppState.tenantStore.Keys).Count -eq 0 -and -not $AppState.configReadFailed) {
-        Write-UILog 'Config' 'Click the gear icon to configure a tenant and get started'
-    }
+    # Last line of the startup, after the definitions lines: no tenants (first
+    # start, or emptied) "Click the gear icon ...", else "Ready to load
+    # policies" (as in the empty cards). None when Config.json is invalid or
+    # unreadable (the error line says why). Creating Config.json /
+    # Options.json is in the log file only.
+    $AppState.startupLastLine = if ($AppState.configReadFailed) { $null }
+        elseif (@($AppState.tenantStore.Keys).Count -eq 0) { @{ Label = 'Config'; Text = 'Click the gear icon to configure a tenant and get started' } }
+        else { @{ Label = 'Startup'; Text = 'Ready to load policies' } }
 
     # Downloaded or shipped (.default) files both count.
     $missingDefs = -not (Get-DefinitionFile -DefinitionsPath $AppState.definitionsPath -Kind Definitions).Exists
     $missingCats = -not (Get-DefinitionFile -DefinitionsPath $AppState.definitionsPath -Kind Categories).Exists
 
     $msg = if ($missingDefs -and $missingCats) {
-        'No setting and category definitions found. Download definitions to resolve display names'
+        'No setting and category definitions found. Download definitions to resolve display names and categories'
     } elseif ($missingDefs) {
-        'No setting definitions found. Download definitions to resolve display names'
+        'No setting definitions found. Download definitions to resolve display names and categories'
     } elseif ($missingCats) {
         'No category definitions found. Download definitions to resolve categories'
     } else { $null }
 
-    if ($msg) {
+    # Both missing: nothing to load, the warning right away, after the same
+    # "Loading ..." line the preload starts with. One missing: the preload
+    # writes it after its "Cached ..." line (-MissingWarning).
+    if ($missingDefs -and $missingCats) {
         # Appended, not Clear-UILog: startup lines (e.g. Get-BasetuneConfig's
         # WARN/ERROR for a plaintext or undecryptable secret) must stay.
         # Write-UILog also writes it to Basetune.log.
+        Write-UILog 'Definitions' 'Loading setting and category definitions...'
         Write-UILog 'Definitions' $msg 'WARN'
+        $msg = $null
     }
 
     # Show "Download Definitions" label if either file is missing.
     Update-DownloadButton
 
     # Definitions + categories into the cache, in the background.
-    try { Start-DefinitionPreload } catch {
+    try { Start-DefinitionPreload -MissingWarning $msg } catch {
         Write-Log 'Definitions' "Could not start loading definitions: $($_.Exception.Message)" 'WARN' -FileOnly
+        if ($msg) { Write-UILog 'Definitions' $msg 'WARN' }
+    }
+    # Nothing preloaded (both files missing, or it could not start): the last
+    # line now. Otherwise the preload writes it when it is done.
+    if (-not $AppState.DefinitionPreload -and $AppState.startupLastLine) {
+        Write-UILog $AppState.startupLastLine.Label $AppState.startupLastLine.Text
+        $AppState.startupLastLine = $null
     }
 })
 

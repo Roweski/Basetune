@@ -13,7 +13,7 @@ $script:AppState = (Get-BasetuneContext).State
 # Any drive or network share, owned by the calling window (never behind it).
 #   1. Microsoft.Win32.OpenFolderDialog (WPF, .NET 8 = PowerShell 7.4+).
 #   2. Fallback for older PowerShell 7: WinForms FolderBrowserDialog
-#      (System.Windows.Forms is loaded by Basetune.ps1).
+#      (System.Windows.Forms is loaded by BasetuneUI.ps1).
 #
 #   InitialPath — optional start folder (ignored if it does not exist)
 #   Owner       — the dialog it is opened from (Tenant Configuration / Options):
@@ -376,7 +376,7 @@ function Import-Xaml {
         [double]$Width  = 0,
         [double]$Height = 0
     )
-    # Errors are thrown; at startup Show-StartupError (Basetune.ps1) shows
+    # Errors are thrown; at startup Show-StartupError (BasetuneUI.ps1) shows
     # them in a message box. No Write-Host / Read-Host: the console is hidden,
     # so the process would wait forever, invisible.
 

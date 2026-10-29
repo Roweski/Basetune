@@ -208,14 +208,14 @@ function Start-Runspace {
             if ($job.Errors.Count -gt 0) {
                 $jobLabel = if ($job.Type) { $job.Type } else { 'Job' }
                 # One line in the log view; the errors themselves only in the log file.
-                Write-UILog $jobLabel "Unexpected error. See the log file for details" 'ERROR'
+                Write-UILog $jobLabel "Unexpected error. See Basetune.log for details" 'ERROR'
                 foreach ($m in $job.Errors) {
                     Write-Log $jobLabel "Details: $m" 'ERROR' -FileOnly
                 }
             }
             # Dispose the pipeline + runspace after OnDone, when the UI is idle:
             # closing a runspace takes a moment and would delay OnDone (Run
-            # Report still disabled after "Created ...Report.html" is logged).
+            # Report still disabled after "Saved ...Report.html" is logged).
             $doneJobPS = $job.PS
             $doneJobRs = $job.Runspace
             # OnDone snapshots $AppState.CurrentJob, then calls Set-Busy $false
@@ -335,7 +335,7 @@ function Stop-ActiveRunspace {
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
 # Creates the job timers (network watcher, stop cleanup, compare Cancel).
-# Called once from Basetune.ps1.
+# Called once from BasetuneUI.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-BasetuneJobs {
     # Compact the Large Object Heap on the next GC.Collect(). Parsing

@@ -3,10 +3,12 @@
 #
 # Intune allows several policies with the same name; by name alone their
 # files would overwrite each other. Colliding names (case-insensitive, like
-# Windows file names) get the full policy id, as the report shows it:
-#     "Name_fc96b86b-65b8-4a1a-915c-a5acb84a196d.json"
-# Two with the same name AND id (copied files in a JSON folder): "_2" after
-# the second one.
+# Windows file names) get the full policy id in parentheses, as the report
+# shows it:
+#     "Name (fc96b86b-65b8-4a1a-915c-a5acb84a196d).json"
+# Two or more with the same name AND id (copied files in a JSON folder): the
+# second one "_2" after the id, the third "_3", ...:
+#     "Name (fc96b86b-65b8-4a1a-915c-a5acb84a196d_2).json"
 #
 # Input : array of objects with Name and Id (Id may be empty for JSON sources)
 # Output: string array of file names (without folder), same order as input;
@@ -29,15 +31,20 @@ function script:Get-ExportFileNames {
     for ($i = 0; $i -lt $safe.Count; $i++) {
         $base = $safe[$i]
         if (-not $base) { $names.Add($null); continue }
+        $suffix = $null
         if ($counts[$base.ToLowerInvariant()] -gt 1) {
             # A GUID has no invalid file name characters; replaced anyway.
             $id     = ([string]$Policies[$i].Id) -replace '[\\/:*?"<>|]', '_'
             $suffix = if ($id) { $id } else { "$($i + 1)" }
-            $base   = "${base}_$suffix"
         }
-        # Last-resort guard: never hand out the same file name twice.
-        $candidate = $base; $n = 2
-        while ($used.ContainsKey($candidate.ToLowerInvariant())) { $candidate = "${base}_$n"; $n++ }
+        # Never the same file name twice: the same name and id gets "_2",
+        # "_3", ... after the id (inside the parentheses).
+        $candidate = if ($suffix) { "$base ($suffix)" } else { $base }
+        $n = 2
+        while ($used.ContainsKey($candidate.ToLowerInvariant())) {
+            $candidate = if ($suffix) { "$base (${suffix}_$n)" } else { "${base}_$n" }
+            $n++
+        }
         $used[$candidate.ToLowerInvariant()] = $true
         $names.Add("$candidate.json")
     }
@@ -57,7 +64,9 @@ function Export-PoliciesToJson {
         Only policies whose name contains this filter string are exported.
 
     .PARAMETER OutputPath
-        Folder where JSON files will be written (e.g. .\JSON\Source).
+        Folder where JSON files will be written (e.g. .\JSON\Source). The
+        caller logs it first ("Export folder: ..."), before its "Exporting
+        ..." line; the same for Export-CachedPoliciesToJson.
 
     .PARAMETER GraphBeta
         Base URI for the Graph beta endpoint.
@@ -103,7 +112,8 @@ function Export-PoliciesToJson {
 
     # ── Fetch all matching policies ───────────────────────────
     $all = Get-GraphPagedResults -Connection $Connection `
-        -Uri "$GraphBeta/deviceManagement/configurationPolicies?`$select=id,name,description,platforms,technologies,templateReference"
+        -Uri "$GraphBeta/deviceManagement/configurationPolicies?`$select=id,name,description,platforms,technologies,templateReference" `
+        -ItemName 'policies'
 
 
     $selected = if ($Filter) {
@@ -244,15 +254,18 @@ function Export-PoliciesToJson {
         $result = $_
         switch ($result.Status) {
             'Written' {
-                Write-Log "Export" "Saved: $($result.File)"
                 $written++
+                # "[3/12] Saved: x.json"; one counting line in the log view
+                # (-Replace), the console and the log file keep every line.
+                $done = $written + $skipped + $failed
+                Write-Log "Export" "[$done/$($selected.Count)] Saved: $($result.File)" -Replace 'PolicyProgress'
             }
             'Skipped' {
                 Write-Log "Export" "Skipping policy with empty name (id: $($result.Id))" "WARN"
                 $skipped++
             }
             'Failed' {
-                Write-Log "Export" "Could not export '$($result.Name)'. See the log file for details" "ERROR"
+                Write-Log "Export" "Could not export '$($result.Name)'. See Basetune.log for details" "ERROR"
                 Write-Log "Export" "Details: '$($result.Name)' (id: $($result.Id)): $($result.Error)" "ERROR" -FileOnly
                 $failed++
             }
@@ -260,8 +273,7 @@ function Export-PoliciesToJson {
     }
 
     $level = if ($failed -gt 0) { "WARN" } else { "INFO" }
-    Write-Log "Export" "Export folder: $OutputPath" "INFO"
-    Write-Log "Export" "Export completed. $written written, $skipped skipped, $failed failed" $level
+    Write-Log "Export" "Export completed ($written written, $skipped skipped, $failed failed)" $level
     return [PSCustomObject]@{ Written = $written; Skipped = $skipped; Failed = $failed }
 }
 
@@ -323,8 +335,6 @@ function Export-CachedPoliciesToJson {
         return
     }
 
-    Write-Log "Export" "Selected policies for export ($($toExport.Count))"
-
     $written = 0
     $skipped = 0
     $failed  = 0
@@ -362,19 +372,20 @@ function Export-CachedPoliciesToJson {
             $filePath = Join-Path $OutputPath $fileName
             $payload | ConvertTo-Json -Depth 50 | Out-File -LiteralPath $filePath -Encoding UTF8
 
-            Write-Log "Export" "Saved: $fileName"
+            # "[3/12] Saved: x.json"; one counting line in the log view
+            # (-Replace), the console and the log file keep every line.
+            Write-Log "Export" "[$($i + 1)/$($toExport.Count)] Saved: $fileName" -Replace 'PolicyProgress'
             $written++
         }
         catch {
-            Write-Log "Export" "Could not export '$($policy.Name)'. See the log file for details" "ERROR"
+            Write-Log "Export" "Could not export '$($policy.Name)'. See Basetune.log for details" "ERROR"
             Write-Log "Export" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
             $failed++
         }
     }
 
     $level = if ($failed -gt 0) { "WARN" } else { "INFO" }
-    Write-Log "Export" "Export folder: $OutputPath" "INFO"
-    Write-Log "Export" "Export completed. $written written, $skipped skipped, $failed failed" $level
+    Write-Log "Export" "Export completed ($written written, $skipped skipped, $failed failed)" $level
     return [PSCustomObject]@{ Written = $written; Skipped = $skipped; Failed = $failed }
 }
 

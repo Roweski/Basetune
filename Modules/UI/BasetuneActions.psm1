@@ -118,19 +118,6 @@ function Start-Load {
         $tenantJsonPath
     }
 
-    if ($origin -eq 'Offline' -and -not (Test-Path $resolvedPath)) {
-        try {
-            New-Item -ItemType Directory -Path $resolvedPath -Force | Out-Null
-            Write-UILog $Side "Created folder: $resolvedPath"
-        } catch {
-            $err = $_
-            Clear-UILog $Side "Could not create folder: $resolvedPath. See the log file for details" 'ERROR'
-            Write-Log $Side "Details: $($err.Exception.Message)" 'ERROR' -FileOnly
-            Set-Busy $false
-            return
-        }
-    }
-
     # Clear the list right away (the name filter stays: it is the load
     # filter), so the select-all row and "x / y" of the previous load go.
     $Items.Clear()
@@ -143,8 +130,7 @@ function Start-Load {
     $UI.btnCompare.IsEnabled = $false
 
     $tenantLabel = Get-UITenantLabel $selectedKey
-    $originDesc  = if ($origin -eq 'Offline') { '(JSON)' } else { '(API)' }
-    Clear-UILog $Side "Loading $($Side.ToLowerInvariant()) policies from $tenantLabel $originDesc..."
+    Clear-UILog $Side "Loading policies from $($Side.ToLowerInvariant()) '$tenantLabel' (id: $selectedKey)..."
     Write-UILog $Side "Policy name filter: $(if ($filter) { "'$filter'" } else { 'None' })"
     Write-UILog $Side "Platform filter: $(Get-PlatformsText ([string[]]$AppState.savedPlatforms))"
 
@@ -159,6 +145,9 @@ function Start-Load {
         TenantLabel = $tenantLabel
         MaxThreads  = $maxT
         Platforms   = [string[]]$AppState.savedPlatforms   # Options > Platforms
+        # The last sign-in of this tenant (Load or Download): reused while
+        # valid and unchanged (Get-GraphConnection).
+        CachedConnection = if ($origin -eq 'Online') { $AppState.graphConnections[$selectedKey] } else { $null }
     }
 
     $work = {
@@ -169,9 +158,19 @@ function Start-Load {
         # Every outcome ends with a status marker. OnDone trusts only that:
         # no marker (runspace died) or Success = $false means the load failed.
         try {
+            # A missing policy folder is reported (after the start lines), not
+            # created: it was renamed, removed or is on a drive that is not
+            # there now. The folder of a new offline baseline is created on
+            # Save in Tenant Configuration.
+            if ($S.Origin -eq 'Offline' -and -not (Test-Path -LiteralPath $S.JsonPath -PathType Container)) {
+                Write-Log $S.Side "Policy folder '$($S.JsonPath)' not found" 'WARN'
+                [PSCustomObject]@{ __type = 'status'; Success = $false; Reason = 'folder' }
+                return
+            }
+
             $conn = $null
             if ($S.Origin -eq 'Online' -and $S.TenantNode) {
-                $conn = New-GraphConnection -Config $S.TenantNode -Label $S.Side
+                $conn = Get-GraphConnection -Config $S.TenantNode -Label $S.Side -Cached $S.CachedConnection
                 if (-not $conn) {
                     [PSCustomObject]@{ __type = 'status'; Success = $false; Reason = 'connection' }
                     return
@@ -195,14 +194,14 @@ function Start-Load {
             # Connection first, then the policies.
             [PSCustomObject]@{ __type = 'connection'; conn = $conn }
             $policies
-            # PlatformSkipped: policies were found, but none for the selected
-            # platforms (card text "No policies match the selected platforms").
-            [PSCustomObject]@{ __type = 'status'; Success = $true; Reason = ''; PlatformSkipped = [bool](Test-LoadPlatformSkipped) }
+            # NoMatch: policies were found, but none that match the name and
+            # platform filters (card text "No policies match the selected filters").
+            [PSCustomObject]@{ __type = 'status'; Success = $true; Reason = ''; NoMatch = [bool](Test-LoadNoMatch) }
         } catch {
             # Errors already reported in detail (expand failures) are not
             # repeated as "Load failed".
             if (-not $_.Exception.Data['BasetuneLogged']) {
-                Write-Log $S.Side 'Load failed. See the log file for details' 'ERROR'
+                Write-Log $S.Side 'Load failed. See Basetune.log for details' 'ERROR'
                 Write-Log $S.Side "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
             }
             [PSCustomObject]@{ __type = 'status'; Success = $false; Reason = 'error' }
@@ -234,6 +233,8 @@ function Start-Load {
             if ($job.LoadSide -eq 'Source') { $AppState.sourceConnection = $connObj.conn }
             else                            { $AppState.targetConnection = $connObj.conn }
         }
+        # Kept per tenant for the next Load / Download of it (new or reused).
+        if ($connObj -and $connObj.conn -and $job.LoadKey) { $AppState.graphConnections[$job.LoadKey] = $connObj.conn }
 
         # Platform key -> label, looked up once per key: Get-PlatformLabel runs
         # a pipeline, too slow per policy with 1000+ policies.
@@ -262,7 +263,7 @@ function Start-Load {
             if ($item.PSObject.Properties['TypeLabel']) {
                 $tr = if ($p.PSObject.Properties['TemplateReference']) { $p.TemplateReference }
                       elseif ($p.PSObject.Properties['templateReference']) { $p.templateReference } else { $null }
-                # JSON tenants: no type in the file = empty column (no Settings Catalog guess).
+                # Offline baselines: no type in the file = empty column (no Settings Catalog guess).
                 $item.TypeLabel = if ($job.LoadOrigin -eq 'Offline') { Get-PolicyTypeLabel $tr -EmptyWhenMissing }
                                   else                               { Get-PolicyTypeLabel $tr }
             }
@@ -298,33 +299,33 @@ function Start-Load {
         $count     = $job.LoadItems.Count
         if ($loadOk -and $count -eq 0) {
             # Not an error. The load module already logs why ("No policies
-            # match the filter 'x'" / "... in '<folder>'"); here only the
-            # message in the empty card.
-            $pfSkipped = ($status -and $status.PSObject.Properties['PlatformSkipped'] -and $status.PlatformSkipped)
-            if ($pfSkipped) {
-                # Policies found, but none for the platforms in Options: same text as the log.
-                $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
-                if ($noMatch) { $noMatch.Text = Get-PlatformNoMatchText -Filter $job.LoadFilter }
-                if ($job.LoadFilter) { $AppState.noMatchLoadFilter[$sideLabel] = $job.LoadFilter }
-            } elseif ($job.LoadFilter) {
-                $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
-                if ($noMatch) { $noMatch.Text = "No policies match the filter '$($job.LoadFilter)'" }
+            # match the selected filters" / "No policies found in folder ..."); here
+            # only the message in the empty card.
+            $noMatchFound = ($status -and $status.PSObject.Properties['NoMatch'] -and $status.NoMatch)
+            $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
+            if ($noMatchFound) {
+                # Policies found, but none that match the name filter and the
+                # platforms in Options: same text as the log.
+                if ($noMatch) { $noMatch.Text = Get-LoadNoMatchText }
                 # Remembered: Reset-Side clears it on a tenant switch if unchanged.
-                $AppState.noMatchLoadFilter[$sideLabel] = $job.LoadFilter
+                if ($job.LoadFilter) { $AppState.noMatchLoadFilter[$sideLabel] = $job.LoadFilter }
             } else {
-                # No filter: empty tenant/folder, or only other platforms than
-                # selected in Options (the log line says which).
-                $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
+                # Empty tenant or folder (the log line says which).
                 if ($noMatch) { $noMatch.Text = 'No policies found' }
             }
         } elseif ($loadOk) {
-            # Success is already logged by the load module ("Loaded 24 policies with filter 'x'").
+            # Success is already logged by the load module ("Loaded 24 policies with name filter 'x'").
         } elseif ($status -and $status.Reason -eq 'connection') {
-            Write-UILog $sideLabel "Could not load policies. See the log file for details" 'ERROR'
+            # No log line: New-GraphConnection already logged why ("Could not
+            # authenticate with Microsoft Graph ..."); only the card text.
             $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
             if ($noMatch) { $noMatch.Text = 'Could not load policies' }
+        } elseif ($status -and $status.Reason -eq 'folder') {
+            # No log line: the WARN "Policy folder 'x' not found" is above.
+            $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
+            if ($noMatch) { $noMatch.Text = 'Policy folder not found' }
         } else {
-            # API and JSON tenants; the cause is in the log (e.g. unreadable files).
+            # Online tenants and offline baselines; the cause is in the log (e.g. unreadable files).
             Write-UILog $sideLabel "Could not load policies. See the errors above" 'ERROR'
             $noMatch = if ($sideLabel -eq 'Source') { $UI.lblSourceNoMatch } else { $UI.lblTargetNoMatch }
             if ($noMatch) { $noMatch.Text = 'Could not load policies' }
@@ -335,6 +336,7 @@ function Start-Load {
         LoadSide   = $Side
         LoadItems  = $Items
         LoadOrigin = $origin   # 'Online' / 'Offline' — for OnDone failure detection
+        LoadKey    = $selectedKey   # tenant id: its sign-in is kept in $AppState.graphConnections
         LoadFilter = $filter   # shown in the "no policies found" message
     }
     # Search / sort stay usable on the other side, if loaded (Test-ListToolsAllowed).
@@ -397,7 +399,7 @@ function Start-Compare {
         New-Item -ItemType Directory -Path $runReportDir -Force -ErrorAction Stop | Out-Null
     } catch {
         $err = $_
-        Clear-UILog 'Compare' "Could not create the report folder. See the log file for details" 'ERROR'
+        Clear-UILog 'Compare' "Could not create the report folder. See Basetune.log for details" 'ERROR'
         Write-Log 'Compare' "Details: '$runReportDir': $($err.Exception.Message)" 'ERROR' -FileOnly
         Set-Busy $false
         Update-Counts
@@ -463,7 +465,7 @@ function Start-Compare {
                 -TargetLabel        $S.reportTargetLabel `
                 -ReportTheme        $S.reportTheme `
                 -SuggestDownload    (-not (Test-DefinitionsRecent -DefinitionsPath $S.defsPath))
-            # (compare.log is written by Invoke-BaselineCompare, next to the report.)
+            # (Compare.log is written by Invoke-BaselineCompare, next to the report.)
 
             # Cache back to the UI: the next compare does not re-parse settings.json.
             [PSCustomObject]@{
@@ -481,7 +483,7 @@ function Start-Compare {
                                Logged  = [bool]($result -and $result.PSObject.Properties['Logged'] -and $result.Logged)
                                DownloadSuggested = [bool]($result -and $result.PSObject.Properties['DownloadSuggested'] -and $result.DownloadSuggested) }
         } catch {
-            Write-Log 'Compare' 'Compare failed. See the log file for details' 'ERROR'
+            Write-Log 'Compare' 'Compare failed. See Basetune.log for details' 'ERROR'
             Write-Log 'Compare' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
             # Logged: OnDone does not add a second "Compare failed" line.
             [PSCustomObject]@{ __type = 'status'; Success = $false; Logged = $true }
@@ -512,10 +514,12 @@ function Start-Compare {
             }
         }
 
-        # A selection change that is still waiting for its log line (no line came after it).
+        # A selection change that is still waiting for its log line (no line
+        # came after "All reports created successfully", or it changed after
+        # the warnings): placed right after that line in the view.
         if ($AppState.compareSelectionNotePending) {
             $AppState.compareSelectionNotePending = $false
-            Write-UILog 'Compare' 'Policy selection changed. Disabling report and details buttons'
+            Write-UICompareSelectionNote
         }
         $ok = ($status -and $status.Success -and -not $job.Fatal)
         if ($ok) { Update-DownloadButton }
@@ -530,7 +534,7 @@ function Start-Compare {
                 $UI.btnOpenReport.IsEnabled = $false
                 $AppState.reportSelectionKey      = $null
             }
-            # Success is already logged by the report module ("Created ...\Report.html ...").
+            # Success is already logged by the report module ("Saved ...\Report.html ...").
         } elseif (-not $job.Fatal -and -not ($status -and $status.PSObject.Properties['Logged'] -and $status.Logged)) {
             # Not logged yet (a fatal error already says "Unexpected error").
             Write-UILog 'Compare' "Compare failed. See the errors above" 'ERROR'
@@ -586,7 +590,7 @@ function Start-Export {
         Clear-UILog 'Export' "Cannot export to a drive root ($exportFolder). Choose a subfolder (e.g. C:\Export)" 'ERROR'
         return
     }
-    # JSON tenant: never into its own folder (files overwritten or duplicated).
+    # Offline baseline: never into its own folder (files overwritten or duplicated).
     $entry = Get-TenantEntry $key
     if ($entry -and (Get-TenantMode $entry.Node) -eq 'Offline' -and $entry.Node.path) {
         $src = $entry.Node.path.Trim().TrimEnd('\')
@@ -598,7 +602,10 @@ function Start-Export {
 
     Set-Busy $true -Side "${Side}Export"
     $UI.btnCompare.IsEnabled = $false
-    Clear-UILog 'Export' "Exporting $($selectedPolicies.Count) of $(@($expanded).Count) $exportLabel policies..."
+    # Export folder first, then the start line; the export module logs the
+    # "[i/N] Saved: ..." lines and "Export completed (...)".
+    Clear-UILog 'Export' "Export folder: $exportFolder"
+    Write-UILog 'Export' "Exporting $($selectedPolicies.Count) of $(@($expanded).Count) policies from '$exportLabel'..."
 
     $shared = @{
         Policies      = $selectedPolicies
@@ -617,7 +624,7 @@ function Start-Export {
                 -OutputPath    $S.OutputPath
             [PSCustomObject]@{ Success = ($null -ne $r -and $r.Failed -eq 0) }
         } catch {
-            Write-Log 'Export' 'Export failed. See the log file for details' 'ERROR'
+            Write-Log 'Export' 'Export failed. See Basetune.log for details' 'ERROR'
             Write-Log 'Export' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
             [PSCustomObject]@{ Success = $false; Logged = $true }
         }
@@ -629,7 +636,7 @@ function Start-Export {
         Update-Counts
         $result = @($job.Output) | Select-Object -Last 1
         if ($result -and $result.Success -and -not $job.Fatal) {
-            # Success is already logged by the export module ("Export completed. ...").
+            # Success is already logged by the export module ("Export completed (...)").
         } elseif (-not $job.Fatal -and -not ($result -and $result.PSObject.Properties['Logged'] -and $result.Logged)) {
             # Some policies failed (each one is in the log above).
             Write-UILog 'Export' "Export failed" 'ERROR'
@@ -644,25 +651,30 @@ function Start-Export {
 # it finishes reads the files itself; a download that finishes first wins
 # (the cache is only filled while empty).
 function Start-DefinitionPreload {
+    # MissingWarning: the startup warning for the one missing file ("No
+    # category definitions found. ..."), written by the runspace after its
+    # "Cached ..." line.
+    param([string]$MissingWarning)
     $defs = Get-DefinitionFile -DefinitionsPath $AppState.definitionsPath -Kind Definitions
     $cats = Get-DefinitionFile -DefinitionsPath $AppState.definitionsPath -Kind Categories
     if (-not $defs.Exists -and -not $cats.Exists) { return }   # startup already warns
 
-    # First line right away (UI thread); the runspace adds the result lines.
-    # Only existing files are loaded; a missing one already has the startup
-    # warning ("No category definitions found. ...").
-    $what = if ($defs.Exists -and $cats.Exists) { 'setting and category definitions' }
-            elseif ($defs.Exists)               { 'setting definitions' }
-            else                                { 'category definitions' }
+    # First line right away (UI thread), always the same (also when one file
+    # is missing, and at startup when both are); the runspace adds the result
+    # lines. Only existing files are loaded.
+    $what = 'setting and category definitions'
     Write-UILog 'Definitions' "Loading $what..."
 
-    # The dots of that line cycle (. .. ...) every 0.6 s (timer below) and end
-    # as plain "...". Best effort: without the run nothing animates.
+    # The dots of that line cycle like the log view's busy lines (none . ..
+    # ..., about 333 ms per step on the 200 ms timer below), starting without
+    # dots, and end as plain "...". Best effort: without the run nothing
+    # animates.
     $loadingRun = $null
     try {
         $lb = $UI.txtLog.Document.Blocks.LastBlock
         if ($lb -is [System.Windows.Documents.Paragraph] -and $lb.Inlines.FirstInline -is [System.Windows.Documents.Run]) {
             $loadingRun = $lb.Inlines.FirstInline
+            $loadingRun.Text = "Loading $what"
         }
     } catch {}
     $AppState.DefinitionPreloadAnim = @{ Run = $loadingRun; Base = "Loading $what"; Tick = 0 }
@@ -685,6 +697,7 @@ function Start-DefinitionPreload {
         LogFile     = $AppState.logFile
         DefsPath    = $defs.Path; DefsName = $defs.Name; DefsExists = $defs.Exists
         CatsPath    = $cats.Path; CatsName = $cats.Name; CatsExists = $cats.Exists
+        MissingWarning = $MissingWarning
     })
     $ps = [System.Management.Automation.PowerShell]::Create()
     $ps.Runspace = $rs
@@ -700,7 +713,7 @@ function Start-DefinitionPreload {
                 Write-Log 'Definitions' "Cached $($defLookup.Count) setting definitions from $($S.DefsName)"
             } catch {
                 $defLookup = $null
-                Write-Log 'Definitions' "Could not read setting definitions. Display names will not be resolved" 'WARN'
+                Write-Log 'Definitions' "Could not read setting definitions. Display names and categories will not be resolved" 'WARN'
                 Write-Log 'Definitions' "Details: $($_.Exception.Message)" 'WARN' -FileOnly
             }
         }
@@ -715,11 +728,12 @@ function Start-DefinitionPreload {
                 Write-Log 'Categories' "Details: $($_.Exception.Message)" 'WARN' -FileOnly
             }
         }
+        if ($S.MissingWarning) { Write-Log 'Definitions' $S.MissingWarning 'WARN' }
         [PSCustomObject]@{ defLookup = $defLookup; catMap = $catMap }
     }) | Out-Null
 
     $AppState.DefinitionPreload = @{
-        Runspace = $rs; PS = $ps; Handle = $ps.BeginInvoke(); Queue = $queue; Timer = $null
+        Runspace = $rs; PS = $ps; Handle = $ps.BeginInvoke(); Queue = $queue; Timer = $null; ViewCleared = $false
     }
     $timer = [System.Windows.Threading.DispatcherTimer]::new()
     $timer.Interval = [TimeSpan]::FromMilliseconds(200)
@@ -730,16 +744,24 @@ function Start-DefinitionPreload {
         $a = $AppState.DefinitionPreloadAnim
         if ($a -and $a.Run) {
             $a.Tick++
-            $dots = if ($done) { 3 } else { ([int][math]::Floor($a.Tick / 3) % 3) + 1 }
+            $dots = if ($done) { 3 } else { [int][math]::Floor($a.Tick * 200 / 333) % 4 }
             try { $a.Run.Text = $a.Base + ('.' * $dots) } catch {}
             if ($done) { $AppState.DefinitionPreloadAnim = $null }
         }
         $batch = [System.Collections.Generic.List[object]]::new(); $item = $null
         while ($p.Queue.TryDequeue([ref]$item)) { $batch.Add($item) }
-        if ($batch.Count -gt 0) { Add-UILogLines $batch.ToArray() }
+        # ViewCleared (Clear-UILogView): an action cleared the log view while
+        # loading; the lines are in the log file already, not shown.
+        if ($batch.Count -gt 0 -and -not $p.ViewCleared) { Add-UILogLines $batch.ToArray() }
         if (-not $done) { return }
 
         $p.Timer.Stop()
+        # The last startup line ("Ready to load policies" / "Click the gear
+        # icon ..."), after the "Cached ..." lines (set in BasetuneUI.ps1).
+        if ($AppState.startupLastLine) {
+            Write-UILog $AppState.startupLastLine.Label $AppState.startupLastLine.Text
+            $AppState.startupLastLine = $null
+        }
         $out = $null
         try { $out = @($p.PS.EndInvoke($p.Handle)) | Select-Object -Last 1 }
         catch { Write-Log 'Definitions' "Could not load definitions: $($_.Exception.Message)" 'WARN' -FileOnly }
@@ -776,7 +798,7 @@ function Start-DefinitionDownload {
 
     $entry = Get-TenantEntry $pickedKey
     if (-not $entry -or (Get-TenantMode $entry.Node) -ne 'Online') {
-        Clear-UILog 'Download' "Download needs an API tenant (ClientSecret or Certificate)" 'ERROR'
+        Clear-UILog 'Download' "Download needs an online tenant (ClientSecret or Certificate)" 'ERROR'
         return
     }
 
@@ -787,12 +809,14 @@ function Start-DefinitionDownload {
     Set-Busy $true -Side 'Download'
     $UI.btnCompare.IsEnabled    = $false
     # btnOpenReport disable / restore is handled centrally by Set-Busy
-    Clear-UILog   # the download itself logs "Downloading setting and category definitions using tenant: ..."
+    Clear-UILog   # the download itself logs "Downloading setting and category definitions using tenant 'x'..."
 
     $shared = @{
         TenantNode      = $entry.Node
         DownloadLabel   = $entry.Label
         DefinitionsPath = $AppState.definitionsPath
+        # Reused while valid and unchanged, as for Load (Get-GraphConnection).
+        CachedConnection = $AppState.graphConnections[$pickedKey]
     }
 
     $work = {
@@ -800,12 +824,14 @@ function Start-DefinitionDownload {
         Import-Module "$($S.ModulesPath)\BasetuneCore.psd1" -Force
         Set-RunspaceLogging -Queue $LogQueue -LogFile $S.LogFile
 
-        Write-Log 'Download' "Downloading setting and category definitions using tenant: $($S.DownloadLabel)..." 'INFO'
-        $conn = New-GraphConnection -Config $S.TenantNode -Label 'Download'
+        Write-Log 'Download' "Downloading setting and category definitions using tenant '$($S.DownloadLabel)'..." 'INFO'
+        $conn = Get-GraphConnection -Config $S.TenantNode -Label 'Download' -Cached $S.CachedConnection
         if (-not $conn) {
-            Write-Log 'Download' "Could not connect to tenant '$($S.DownloadLabel)'. Check the credentials in Tenant Configuration. See the log file for details" 'ERROR'
+            Write-Log 'Download' "Could not connect to tenant '$($S.DownloadLabel)'. Check the credentials in Tenant Configuration. See Basetune.log for details" 'ERROR'
             return [PSCustomObject]@{ Success = $false; Logged = $true }
         }
+        # Kept by the UI for the next Load / Download of this tenant (see OnDone).
+        [PSCustomObject]@{ __type = 'connection'; conn = $conn }
 
         try {
             $dl = Invoke-DefinitionDownload `
@@ -821,7 +847,7 @@ function Start-DefinitionDownload {
             }
             [PSCustomObject]@{ Success = $true }
         } catch {
-            Write-Log 'Download' 'Download failed. See the log file for details' 'ERROR'
+            Write-Log 'Download' 'Download failed. See Basetune.log for details' 'ERROR'
             Write-Log 'Download' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
             [PSCustomObject]@{ Success = $false; Logged = $true }
         }
@@ -838,6 +864,8 @@ function Start-DefinitionDownload {
         # one never looks like fresh data was loaded.
         $result   = @($job.Output) | Select-Object -Last 1
         $cacheOut = @($job.Output) | Where-Object { $_.PSObject.Properties['__type'] -and $_.__type -eq 'cache' } | Select-Object -First 1
+        $connOut  = @($job.Output) | Where-Object { $_.PSObject.Properties['__type'] -and $_.__type -eq 'connection' } | Select-Object -First 1
+        if ($connOut -and $connOut.conn -and $job.DownloadKey) { $AppState.graphConnections[$job.DownloadKey] = $connOut.conn }
         if ($result -and $result.Success -and -not $job.Fatal) {
             # Lookups built by the runspace: the 60+ MB file is not re-parsed
             # on the UI thread.
@@ -856,7 +884,7 @@ function Start-DefinitionDownload {
         }
         # Icon-only when both files are on disk now, the label after a failure.
         Update-DownloadButton
-    } -Context @{ Type = 'Download'; Side = 'Download' }
+    } -Context @{ Type = 'Download'; Side = 'Download'; DownloadKey = $pickedKey }
     # Search / sort stay usable during the download (Test-ListToolsAllowed).
     Enable-ListToolsDuringJob
 }
@@ -864,7 +892,7 @@ function Start-DefinitionDownload {
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
 # Wires the Load / Compare / Export / Download / View Report buttons.
-# Called once from Basetune.ps1.
+# Called once from BasetuneUI.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-BasetuneActions {
     $UI.btnSourceLoad.Add_Click({
@@ -910,7 +938,7 @@ function Initialize-BasetuneActions {
             $diffCsv = if ($AppState.reportPath) { Join-Path (Split-Path $AppState.reportPath -Parent) 'Diff.csv' } else { $null }
             if ($diffCsv -and (Test-Path -LiteralPath $diffCsv)) {
                 try { Start-Process $diffCsv -ErrorAction Stop } catch {
-                    Write-Log 'Report' 'Could not open Diff.csv. See the log file for details' 'ERROR'
+                    Write-Log 'Report' 'Could not open Diff.csv. See Basetune.log for details' 'ERROR'
                     Write-Log 'Report' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
                 }
             } else {

@@ -14,8 +14,8 @@ $ErrorActionPreference = 'Stop'
 # ─────────────────────────────────────────────────────────────────────────────
 # Resolve-TenantConfig
 #
-# Source and target tenant nodes by SourceId / TargetId (-SourceId /
-# -TargetId of the CLI; the UI picks tenants in its lists). No default; an
+# Source and target tenant nodes by SourceId / TargetId (-Source /
+# -Target of the CLI; the UI picks tenants in its lists). No default; an
 # unknown or invalid entry gives $null.
 # ─────────────────────────────────────────────────────────────────────────────
 function Resolve-TenantConfig {

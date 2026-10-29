@@ -1,12 +1,12 @@
 # =============================================================================
 # BasetuneState.psm1
-# Shared UI context (controls + app state) for Basetune.ps1 and the UI
-# modules (see the list in Basetune.ps1).
+# Shared UI context (controls + app state) for BasetuneUI.ps1 and the UI
+# modules (see the list in BasetuneUI.ps1).
 #
-# A module cannot see the $script: variables of Basetune.ps1, so this
+# A module cannot see the $script: variables of BasetuneUI.ps1, so this
 # module owns one context hashtable (no $global:, see CLAUDE.md). Every UI
 # module takes a reference to it at import time
-# (`$script:UI = (Get-BasetuneContext).UI`), Basetune.ps1 does the same at
+# (`$script:UI = (Get-BasetuneContext).UI`), BasetuneUI.ps1 does the same at
 # script scope: all share the SAME hashtable, so a control registered in one
 # place is visible everywhere.
 #
@@ -22,7 +22,7 @@
 #     State = @{                    # read as $AppState.<name>
 #       ScriptRoot, ModulesPath, definitionsPath, reportBasePath, ...
 #       CurrentJob, Cache, cfg, tenantStore, editingTenantKey, ...
-#     }                             # (initialised in Basetune.ps1)
+#     }                             # (initialised in BasetuneUI.ps1)
 #   }
 # =============================================================================
 

@@ -3,19 +3,17 @@
 # Policy loading — JSON, Tenant, and source resolution with fallback.
 # =============================================================================
 
-# Nothing left after the platform filter. With a name filter:
-# "No policies match the filter 'x'"; without: "No policies found for the
-# selected platforms". Same text in the log and (UI) in the empty card.
-function Get-PlatformNoMatchText {
-    param([string]$Filter)
-    if ($Filter) { "No policies match the filter '$Filter'" }
-    else         { "No policies found for the selected platforms" }
-}
+# Nothing left after the name filter and the platform filter, while the tenant
+# or folder does have policies. One text for both filters: the filters
+# themselves are logged at the start of the load ("Policy name filter: 'x'",
+# "Platform filter: Windows, macOS"). Same text in the log and (UI) in the
+# empty card. An empty tenant or folder has its own line ("No policies found ...").
+function Get-LoadNoMatchText { 'No policies match the selected filters' }
 
-# $true when the last Resolve-PolicySource (without name filter) found
-# policies, but none for the selected platforms (read by the UI for the card).
-$script:LoadPlatformSkipped = $false
-function Test-LoadPlatformSkipped { return [bool]$script:LoadPlatformSkipped }
+# $true when the last Resolve-PolicySource found policies, but none that match
+# the selected filters (read by the UI for the card text).
+$script:LoadNoMatch = $false
+function Test-LoadNoMatch { return [bool]$script:LoadNoMatch }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LOAD VALIDATION (shared by JSON and Graph)
@@ -53,7 +51,7 @@ function script:Write-SkipSummary {
     $text = @{
         read     = 'read errors'
         platform = 'missing or unknown platform'
-        fields   = 'missing required fields (id, name or settings)'
+        fields   = 'missing required fields (id, name, or settings)'
     }
     foreach ($r in 'read', 'platform', 'fields') {
         $n = [int]$Counts[$r]
@@ -86,81 +84,90 @@ function Read-PoliciesFromJson {
     # -LiteralPath: folder names with [ ] would otherwise be read as wildcards.
     $allFiles = @(Get-ChildItem -LiteralPath $Path -Filter "*.json" -File)
     # After the "Platform filter: ..." header: JSON files before the name filter.
-    $fw = if ($allFiles.Count -eq 1) { 'file' } else { 'files' }
+    $fw = if ($allFiles.Count -eq 1) { 'JSON file' } else { 'JSON files' }
     Write-Log $Label "Found $($allFiles.Count) $fw in policy folder" "INFO"
-    $files = @($allFiles | Where-Object { $_.BaseName -like "*$Filter*" })
 
-    if ($files.Count -eq 0) {
-        $msg = if ($Filter) { "No policies match the filter '$Filter'" } else { "No policies found in '$Path'" }
-        Write-Log $Label $msg "WARN"
+    if ($allFiles.Count -eq 0) {
+        Write-Log $Label "No policies found in folder '$Path'" "WARN"
         return @()
     }
 
-    # An unreadable file must not stop the load, nor disappear silently: one
-    # ERROR per file, the total at the end.
-    $failed     = 0
-    # One reason per failed file (first failing check wins); one
-    # "Skipped N files due to <reason>" line per reason.
+    # An unreadable or incomplete file must not stop the load, nor disappear
+    # silently: one line per file, then one "Skipped N files due to <reason>"
+    # line per reason (first failing check wins). These files are not counted
+    # as matches.
     $failCounts = @{}
     $skipped    = @{}
-    # Two passes. Pass 1 reads and checks the files that pass the name filter,
-    # without logging; then "N files match the selected filters" (name +
-    # platform filter); pass 2 logs one line per file with its position
-    # "[3/22]" among those N. Other platforms are only counted
-    # (Write-PlatformSkipLog), not listed.
-    $checked = [System.Collections.Generic.List[object]]::new()
-    foreach ($file in $files) {
-        $rec = @{ File = $file; Status = 'ok'; Detail = $null; Why = $null; P = $null; Error = $null }
+    # Pass 1 reads and checks every file, also the ones that fail the name
+    # filter: the skip lines (other platforms, unreadable or incomplete files)
+    # show the totals of the folder. A file of another platform than selected
+    # is only counted, not checked or listed. The others go to $problems
+    # (unreadable, missing or unknown platform, missing fields) or, when the
+    # name matches, to $checked (the matches). Then the skip lines, "N policies
+    # match the selected filters" and one line per match with its position
+    # "[3/22]".
+    $problems = [System.Collections.Generic.List[object]]::new()
+    $checked  = [System.Collections.Generic.List[object]]::new()
+    # Pass 1 logs nothing and takes seconds on a large folder: this line
+    # shows the load is busy (animated in the UI log view, UILogAnimRegex).
+    Write-Log $Label "Reading $($allFiles.Count) $fw..." "INFO"
+    foreach ($file in $allFiles) {
         try {
             # [IO.File]::ReadAllText: UTF-8 (BOM honoured), literal path, about
             # 5x faster than Get-Content -Raw.
             $p = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($file.FullName)) -ErrorAction Stop
         } catch {
-            $rec.Status = 'read'; $rec.Error = $_.Exception.Message
-            $checked.Add($rec); continue
+            $problems.Add(@{ File = $file; Why = 'read'; Error = $_.Exception.Message })
+            continue
         }
+        $pf = if ($p -and $p.PSObject.Properties['platforms']) { $p.platforms } else { $null }
+        Add-OtherPlatformCount $pf $Platforms $skipped
+        # Known platform, not selected: counted above, nothing else to report.
+        $key = Get-PlatformKey $pf
+        if ($key -and @($Platforms).Count -gt 0 -and $key -notin $Platforms) { continue }
         # Required: platform, id, name, settings. Type (templateReference) is optional.
-        $pf   = if ($p -and $p.PSObject.Properties['platforms']) { $p.platforms } else { $null }
         $vals = @{}
         foreach ($f in 'id', 'name', 'settings') { $vals[$f] = if ($p -and $p.PSObject.Properties[$f]) { $p.$f } else { $null } }
         $prob = Get-PolicyLoadProblem -Names 'id', 'name', 'settings' -Values $vals -PlatformsValue $pf
         if ($prob) {
-            $rec.Status = 'problem'; $rec.Why = $prob.Why; $rec.Detail = $prob.Detail
-            $checked.Add($rec); continue
+            $problems.Add(@{ File = $file; Why = $prob.Why; Detail = $prob.Detail })
+            continue
         }
-        # Other platform than selected (settings.platforms): skipped, counted.
-        if (-not (Test-PolicyPlatform $pf $Platforms $skipped)) { continue }
-        $rec.P = $p
-        $checked.Add($rec)
+        if ($file.BaseName -like "*$Filter*") { $checked.Add($p) }
     }
 
-    $matchWord = if ($checked.Count -eq 1) { 'file matches' } else { 'files match' }
+    # Other platforms, then the skipped files, then the result. One INFO line
+    # per skipped file; the WARN is the summary per reason (Write-SkipSummary).
+    Write-PlatformSkipLog -Label $Label -Skipped $skipped
+    foreach ($rec in $problems) {
+        if ($rec.Why -eq 'read') {
+            Write-Log $Label "Could not read '$($rec.File.Name)'. See Basetune.log for details" "ERROR"
+            Write-Log $Label "Details: $($rec.Error)" "ERROR" -FileOnly
+        } else {
+            Write-Log $Label "Skipped '$($rec.File.Name)' ($($rec.Detail))" "INFO"
+        }
+        $failCounts[$rec.Why] = 1 + [int]$failCounts[$rec.Why]
+    }
+    Write-SkipSummary -Label $Label -Counts $failCounts -Noun 'file'
+
+    if ($checked.Count -eq 0) {
+        Write-Log $Label (Get-LoadNoMatchText) "WARN"
+        $script:LoadNoMatch = $true   # card text in the UI (Test-LoadNoMatch)
+        return @()
+    }
+
+    $matchWord = if ($checked.Count -eq 1) { 'policy matches' } else { 'policies match' }
     Write-Log $Label "$($checked.Count) $matchWord the selected filters" "INFO"
 
     $fileIdx   = 0
     $fileTotal = $checked.Count
-    $policies = @(foreach ($rec in $checked) {
+    $policies = @(foreach ($p in $checked) {
         $fileIdx++
-        $pos  = " [$fileIdx/$fileTotal]"
-        $file = $rec.File
-        if ($rec.Status -eq 'read') {
-            Write-Log $Label "Could not read '$($file.Name)'. See the log file for details$pos" "ERROR"
-            Write-Log $Label "Details: $($rec.Error)" "ERROR" -FileOnly
-            $failed++
-            $failCounts['read'] = 1 + [int]$failCounts['read']
-            continue
-        }
-        if ($rec.Status -eq 'problem') {
-            Write-Log $Label "Skipped '$($file.Name)': $($rec.Detail)$pos" "WARN"
-            $failed++
-            $failCounts[$rec.Why] = 1 + [int]$failCounts[$rec.Why]
-            continue
-        }
-        $p = $rec.P
-        # One line per policy, like "Expanded settings: <name>" for API tenants.
-        Write-Log $Label "Loaded policy: $($p.name)$pos" "INFO"
+        # One line per policy, like "Expanded settings: <name>" for online
+        # tenants; the log view overwrites it (-Replace), the file keeps all.
+        Write-Log $Label "[$fileIdx/$fileTotal] Loaded policy: $($p.name)" "INFO" -Replace 'PolicyProgress'
         # Description/Platforms/Technologies/TemplateReference: for Export only
-        # (same file shape as an API tenant); the compare uses Name and Settings.
+        # (same file shape as an online tenant); the compare uses Name and Settings.
         [PSCustomObject]@{
             PolicyId          = if ($p.PSObject.Properties['id']) { $p.id } else { $null }
             Name              = $p.name
@@ -172,23 +179,14 @@ function Read-PoliciesFromJson {
         }
     })
 
-    # Failed files first, then other platforms, then the Loaded line (result).
-    Write-SkipSummary -Label $Label -Counts $failCounts -Noun 'file'
-    Write-PlatformSkipLog -Label $Label -Skipped $skipped
-    if ($policies.Count -eq 0 -and $skipped.Count -gt 0 -and $failed -eq 0) {
-        Write-Log $Label (Get-PlatformNoMatchText -Filter $Filter) "WARN"
-        $script:LoadPlatformSkipped = -not $Filter   # card text in the UI (Test-LoadPlatformSkipped)
-        return @()
-    }
-
-    # Same line as for API tenants: "Loaded 24 policies with filter 'x'".
+    # Same line as for online tenants: "Loaded 24 policies with name filter 'x'".
     $loadedMsg = Format-LoadedMessage -Count $policies.Count -Filter $Filter -Policies $policies -Platforms $Platforms
     Write-Log $Label $loadedMsg
     return $policies
 }
 
-# "Loaded 24 policies with filter 'x'" (or "Loaded 24 policies"), for JSON and
-# API tenants. With a platform selected, the count per platform is added for
+# "Loaded 24 policies with name filter 'x'" (or "Loaded 24 policies"), for JSON and
+# online tenants. With a platform selected, the count per platform is added for
 # platforms with policies plus the selected ones (also with 0):
 # "Loaded 207 policies (Windows: 207, macOS: 0)".
 # "Other" is only a safe fallback: policies without a known platform are never
@@ -208,7 +206,7 @@ function script:Get-LoadedPlatformCounts {
 function Format-LoadedMessage {
     param([int]$Count, [string]$Filter, $Policies, [string[]]$Platforms)
     $noun = if ($Count -eq 1) { 'policy' } else { 'policies' }
-    $msg  = if ($Filter) { "Loaded $Count $noun with filter '$Filter'" } else { "Loaded $Count $noun" }
+    $msg  = if ($Filter) { "Loaded $Count $noun with name filter '$Filter'" } else { "Loaded $Count $noun" }
     if ($Count -gt 0 -and @($Platforms).Count -ge 1) {
         $counts = Get-LoadedPlatformCounts $Policies
         # Platforms with policies, plus every selected platform (also with 0).
@@ -252,53 +250,52 @@ function Read-PoliciesFromTenant {
         [string[]]$Platforms = @()
     )
 
+    # The Graph endpoint first, on its own line (without the $select).
+    Write-Log $Label "Uri: $GraphBeta/deviceManagement/configurationPolicies" "INFO"
     Write-Log $Label "Fetching policies from Graph API..." "INFO"
     $all = @(Get-GraphPagedResults -Connection $Connection -Quiet `
         -Uri "$GraphBeta/deviceManagement/configurationPolicies?`$select=id,name,description,platforms,technologies,templateReference")
     $noun = if ($all.Count -eq 1) { 'policy' } else { 'policies' }
     Write-Log $Label "Fetched $($all.Count) $noun from Graph API"
 
-    $selected = if ($Filter) {
-        $all | Where-Object { $_.name -like "*$Filter*" }
-    } else {
-        $all
-    }
-
-    $selected = @($selected)
-    if ($selected.Count -eq 0) {
-        $msg = if ($Filter) { "No policies match the filter '$Filter'" } else { "No policies found in the tenant" }
-        Write-Log $Label $msg "WARN"
+    if ($all.Count -eq 0) {
+        Write-Log $Label "No policies found in the tenant" "WARN"
         return @()
     }
 
-    # Same checks as for JSON: platform, id, name (settings after the expand).
-    # A failing policy is skipped and counted, one line each.
+    # Other platforms are counted over the whole tenant, not only the name
+    # filter matches: the skip line shows the totals. Logged here, before
+    # "N policies match the selected filters" (or the no-match line).
+    $skipped = @{}
+    foreach ($pol in $all) { Add-OtherPlatformCount $pol.platforms $Platforms $skipped }
+    Write-PlatformSkipLog -Label $Label -Skipped $skipped
+
+    # Same checks as for JSON: platform, id, name (settings after the expand),
+    # over the whole tenant like the platform count, also for policies that
+    # fail the name filter. A failing policy is skipped and counted, one line
+    # each, and is not a match. A known platform that is not selected is only
+    # counted (above). The name filter applies to the valid policies.
     $failCounts = @{}
     $valid = [System.Collections.Generic.List[object]]::new()
-    foreach ($pol in $selected) {
+    foreach ($pol in $all) {
+        $key = Get-PlatformKey $pol.platforms
+        if ($key -and @($Platforms).Count -gt 0 -and $key -notin $Platforms) { continue }
         $prob = Get-PolicyLoadProblem -Names 'id', 'name' -Values @{ id = $pol.id; name = $pol.name } -PlatformsValue $pol.platforms
         if ($prob) {
             $shownName = if ($pol.name) { $pol.name } else { $pol.id }
-            Write-Log $Label "Skipped '$shownName': $($prob.Detail)" "WARN"
+            Write-Log $Label "Skipped '$shownName' ($($prob.Detail))" "INFO"
             $failCounts[$prob.Why] = 1 + [int]$failCounts[$prob.Why]
             continue
         }
-        $valid.Add($pol)
+        if ($pol.name -like "*$Filter*") { $valid.Add($pol) }
     }
-    $selected = @($valid)
-
     # Other platforms are dropped before the settings are fetched.
-    $skipped  = @{}
-    $selected = @($selected | Where-Object { Test-PolicyPlatform $_.platforms $Platforms $skipped })
-    # Skip lines go just before "Loaded ..." (like JSON), or here when nothing
-    # is left to load.
+    $selected = @($valid)
+    # Like JSON: the skipped policies before the match line.
+    Write-SkipSummary -Label $Label -Counts $failCounts -Noun 'policy'
     if ($selected.Count -eq 0) {
-        Write-SkipSummary -Label $Label -Counts $failCounts -Noun 'policy'
-        Write-PlatformSkipLog -Label $Label -Skipped $skipped
-        if ($failCounts.Count -eq 0) {
-            Write-Log $Label (Get-PlatformNoMatchText -Filter $Filter) "WARN"
-            $script:LoadPlatformSkipped = -not $Filter   # card text in the UI (Test-LoadPlatformSkipped)
-        }
+        Write-Log $Label (Get-LoadNoMatchText) "WARN"
+        $script:LoadNoMatch = $true   # card text in the UI (Test-LoadNoMatch)
         return @()
     }
 
@@ -308,7 +305,7 @@ function Read-PoliciesFromTenant {
     # (the N of "[i/N]" below).
     $matchWord = if ($selected.Count -eq 1) { 'policy matches' } else { 'policies match' }
     Write-Log $Label "$($selected.Count) $matchWord the selected filters" "INFO"
-    Write-Log $Label "Loading settings from Graph API..." "INFO"
+    Write-Log $Label "Expanding policy settings from Graph API..." "INFO"
 
     # ── Network outages ──────────────────────────────────────────────────────
     # Workers do NOT retry network errors (-NetworkRetries 0): with 8 workers
@@ -324,7 +321,7 @@ function Read-PoliciesFromTenant {
     $netWaits    = 0
     $netMaxOutages = 3
     $netOutages    = 0
-    # Shared (thread-safe) counter for "[i/N]" after each "Expanded settings".
+    # Shared (thread-safe) counter for "[i/N]" before each "Expanded settings".
     $expandProg  = [hashtable]::Synchronized(@{ N = 0; Total = $selected.Count })
     $expanded    = [System.Collections.Generic.List[object]]::new()
     $pending     = $selected
@@ -418,22 +415,31 @@ function Read-PoliciesFromTenant {
             $_label = $using:Label
             $_name  = $policy.Name
             $_prog  = $using:expandProg
+            # Number and write the line under one lock: taking the number
+            # inside and writing outside it lets another worker's line get
+            # ahead ("[11/46]" before "[10/46]"). The positions count the
+            # policies done, so the names follow the order the workers finish.
             [System.Threading.Monitor]::Enter($_prog.SyncRoot)
-            try { $_prog.N = [int]$_prog.N + 1; $_pos = " [$($_prog.N)/$($_prog.Total)]" }
+            try {
+                $_prog.N = [int]$_prog.N + 1
+                $_pos = "[$($_prog.N)/$($_prog.Total)] "
+                # -Replace: the log view overwrites the previous one (New-LogEntry).
+                $_entry = New-LogEntry $_label "$($_pos)Expanded settings: $_name" -Replace 'PolicyProgress'
+                if ($_lq) {
+                    $_lq.Enqueue($_entry)
+                } else {
+                    Write-Log $_label "$($_pos)Expanded settings: $_name" "INFO" -Replace 'PolicyProgress'
+                }
+                # Mirror to the log file directly (the parent's Set-LogFile is
+                # not visible here). Best-effort; file errors never break the
+                # run. Add-LogFileLine serialises with a named mutex (shared
+                # with the UI, its runspaces and the CLI); always taken after
+                # this lock, never before it.
+                if ($_lf) {
+                    Add-LogFileLine -Path $_lf -Entry $_entry -Source $using:LogSource
+                }
+            }
             finally { [System.Threading.Monitor]::Exit($_prog.SyncRoot) }
-            $_entry = New-LogEntry $_label "Expanded settings: $_name$_pos"
-            if ($_lq) {
-                $_lq.Enqueue($_entry)
-            } else {
-                Write-Log $_label "Expanded settings: $_name$_pos" "INFO"
-            }
-            # Mirror to the log file directly (the parent's Set-LogFile is not
-            # visible here). Best-effort; file errors never break the run.
-            if ($_lf) {
-                # Add-LogFileLine serialises with a named mutex (shared with
-                # the UI, its runspaces and the CLI).
-                Add-LogFileLine -Path $_lf -Entry $_entry -Source $using:LogSource
-            }
 
             # List-call fields ($policy) + expanded settings ($r): so
             # Export-CachedPoliciesToJson needs no extra calls.
@@ -456,7 +462,7 @@ function Read-PoliciesFromTenant {
 
         if ($hardFail.Count -gt 0) {
             foreach ($f in $hardFail) {
-                Write-Log $Label "Could not fetch settings for '$($f.Name)'. See the log file for details" "ERROR"
+                Write-Log $Label "Could not fetch settings for '$($f.Name)'. See Basetune.log for details" "ERROR"
                 Write-Log $Label "Details: $($f.Error)" "ERROR" -FileOnly
             }
             # Abort instead of returning a partial set: their settings would show
@@ -501,18 +507,19 @@ function Read-PoliciesFromTenant {
     }
 
     # settings is required too: a policy without it is skipped like the others.
+    # Only known after the expand, so its own summary here, before "Loaded ...".
+    $settingsFail = @{}
     $loaded = [System.Collections.Generic.List[object]]::new()
     foreach ($e in $expanded) {
         if (@($e.Settings).Count -eq 0) {   # null or empty, like JSON
-            Write-Log $Label "Skipped '$($e.Name)': missing required field 'settings'" "WARN"
-            $failCounts['fields'] = 1 + [int]$failCounts['fields']
+            Write-Log $Label "Skipped '$($e.Name)' (missing required field 'settings')" "INFO"
+            $settingsFail['fields'] = 1 + [int]$settingsFail['fields']
             continue
         }
         $loaded.Add($e)
     }
 
-    Write-SkipSummary -Label $Label -Counts $failCounts -Noun 'policy'
-    Write-PlatformSkipLog -Label $Label -Skipped $skipped
+    Write-SkipSummary -Label $Label -Counts $settingsFail -Noun 'policy'
     Write-Log $Label (Format-LoadedMessage -Count $loaded.Count -Filter $Filter -Policies $loaded -Platforms $Platforms)
     return $loaded.ToArray()
 }
@@ -543,7 +550,7 @@ function Resolve-PolicySource {
         [string[]]$Platforms = @()
     )
 
-    $script:LoadPlatformSkipped = $false
+    $script:LoadNoMatch = $false
 
     # Online origin — but no connection available, hard stop
     if ($Origin -eq "Online" -and -not $Connection) {
@@ -572,6 +579,6 @@ Export-ModuleMember -Function @(
     'Read-PoliciesFromJson',
     'Read-PoliciesFromTenant',
     'Resolve-PolicySource',
-    'Get-PlatformNoMatchText',
-    'Test-LoadPlatformSkipped'
+    'Get-LoadNoMatchText',
+    'Test-LoadNoMatch'
 )

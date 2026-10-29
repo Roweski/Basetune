@@ -310,8 +310,8 @@ function Get-HtmlReport {
     $html = $html -creplace '\{\{DATA\}\}', { $jsonData }
 
     $html | Out-File -FilePath $OutputPath -Encoding UTF8 -ErrorAction Stop
-    Write-Log "Report" "Created $OutputPath ($totalSettings settings)"
-    # The number of settings, for the summary at the end of compare.log.
+    Write-Log "Report" "Saved $OutputPath ($totalSettings settings)"
+    # The number of settings, for the summary at the end of Compare.log.
     return $totalSettings
 }
 

@@ -1,7 +1,7 @@
 # =============================================================================
 # BasetuneDownloadWindow.psm1
 # Download definitions window (Show-TenantPickerDialog, BasetuneDownload.xaml):
-# shows the definitions in use and lets the user pick an API tenant. The
+# shows the definitions in use and lets the user pick an online tenant. The
 # download runs in BasetuneActions.psm1 (Start-DefinitionDownload).
 # $UI / $AppState come from BasetuneState.psm1.
 # =============================================================================
@@ -23,8 +23,9 @@ function Get-DefinitionStatus {
 
     $defs = Get-DefinitionFile -DefinitionsPath $path -Kind Definitions
 
-    if ($cache.HasDefs -and $cache.Lookup)       { $status.Definitions = $cache.Lookup.Count.ToString('N0', $inv) }
-    if ($cache.HasCats -and $cache.CategoryById) { $status.Categories  = $cache.CategoryById.Count.ToString('N0', $inv) }
+    # Plain numbers (18422), as in the log lines: no thousands separator.
+    if ($cache.HasDefs -and $cache.Lookup)       { $status.Definitions = $cache.Lookup.Count.ToString($inv) }
+    if ($cache.HasCats -and $cache.CategoryById) { $status.Categories  = $cache.CategoryById.Count.ToString($inv) }
 
     if ($defs.Exists -and -not $defs.IsDefault) {
         $status.LastUpdated = (Get-Item -LiteralPath $defs.Path).LastWriteTime.ToString('dd/MM/yyyy HH:mm', $inv)
@@ -59,7 +60,7 @@ function Show-TenantPickerDialog {
     if ($onlineTenants.Count -eq 0) {
         $cmb.IsEnabled   = $false
         $btnOk.IsEnabled = $false
-        if ($cmbHint)      { $cmbHint.Text = 'No tenant with App Registration found' }
+        if ($cmbHint)      { $cmbHint.Text = 'No online tenant found' }
     } else {
         foreach ($t in $onlineTenants) {
             $item         = [System.Windows.Controls.ComboBoxItem]::new()

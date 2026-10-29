@@ -36,52 +36,24 @@ function Get-BasetuneConfig {
     } catch {
         return [PSCustomObject]@{
             tenant              = $null
-            __configError       = "Could not read Config.json. See the log file for details."
+            __configError       = "Could not read Config.json. See Basetune.log for details"
             __configErrorDetail = "$($_.Exception.Message)".Trim()
         }
     }
     try {
         $cfg = $rawJson | ConvertFrom-Json -ErrorAction Stop
     } catch {
-        $parseError = $_
-        # A hand-typed  "maxthreads": x  (no quotes) makes the whole file
-        # invalid JSON: set an invalid maxthreads to the default and parse
-        # once more. Still broken: the original error is reported.
-        $cfg = $null
-        $mtPattern = '("maxthreads"\s*:\s*)([^,\}\r\n]*)'
-        $mtMatch   = [regex]::Match($rawJson, $mtPattern)
-        if ($mtMatch.Success) {
-            $mtRawText = $mtMatch.Groups[2].Value.Trim()
-            if (-not (Test-MaxThreadsValue ($mtRawText.Trim('"')))) {
-                $mtDefault = (Get-MaxThreadsRange).Default
-                $g2        = $mtMatch.Groups[2]
-                $fixedJson = $rawJson.Substring(0, $g2.Index) + "$mtDefault" + $rawJson.Substring($g2.Index + $g2.Length)
-                try {
-                    $cfg = $fixedJson | ConvertFrom-Json -ErrorAction Stop
-                    $rawJson  = $fixedJson
-                    $repaired = $true
-                    Write-Log 'Config' "Invalid max threads '$mtRawText' in Config.json (allowed: $((Get-MaxThreadsRange).Min)-$((Get-MaxThreadsRange).Max)). Set to default ($mtDefault)" 'WARN'
-                } catch { $cfg = $null }
-            }
-        }
-        if (-not $cfg) {
-            # Short message for the log view; the full .NET parse error goes
-            # to the log file only (__configErrorDetail).
-            $detail = "$($parseError.Exception.Message)".Trim()
-            $where  = if ($detail -match 'line (\d+), position (\d+)') { " (line $($Matches[1]), position $($Matches[2]))" } else { '' }
-            return [PSCustomObject]@{
-                tenant              = $null
-                __configError       = "Config.json is not a valid JSON file$where. Fix the file and restart Basetune."
-                __configErrorDetail = $detail
-            }
+        # Short message for the log view; the full .NET parse error goes to
+        # the log file only (__configErrorDetail).
+        $detail = "$($_.Exception.Message)".Trim()
+        $where  = if ($detail -match 'line (\d+), position (\d+)') { " (line $($Matches[1]), position $($Matches[2]))" } else { '' }
+        return [PSCustomObject]@{
+            tenant              = $null
+            __configError       = "Config.json is not a valid JSON file$where. Fix the file and restart Basetune"
+            __configErrorDetail = $detail
         }
     }
     $cfg | Add-Member -NotePropertyName '__configError' -NotePropertyValue $null -Force
-
-    # Internal markers (runtime state) found on disk, written by older
-    # versions: removed by the sanitized re-save further down.
-    $legacyMarkersOnDisk = ($rawJson -match '"__plaintextForSession"' -or
-                            $rawJson -match '"__configError"')
 
     # ── Repair incomplete tenant entries ──────────────────────────────────────
     # A hand-edited entry without authMethod would show as "(JSON)" despite
@@ -89,10 +61,10 @@ function Get-BasetuneConfig {
     #   certThumbprint present              → Certificate
     #   clientSecret present                → ClientSecret
     #   only tenantId / clientId present    → ClientSecret (UI default)
-    #   only path present                   → None (offline JSON tenant)
-    # API tenants also get an empty entry for every missing required field, so
+    #   only path present                   → None (offline baseline)
+    # Online tenants also get an empty entry for every missing required field, so
     # it shows up in Tenant Configuration. A set authMethod is never changed.
-    # Repairs are saved below ($repaired may already be $true from maxthreads).
+    # Repairs are saved below.
     if ($cfg.PSObject.Properties['tenant'] -and $cfg.tenant) {
         foreach ($tProp in @($cfg.tenant.PSObject.Properties)) {
             $node = $tProp.Value
@@ -103,7 +75,7 @@ function Get-BasetuneConfig {
             $derived = $false
 
             if (-not $auth) {
-                # A path without any credential means JSON tenant (valid
+                # A path without any credential means offline baseline (valid
                 # without authMethod), even with a leftover tenantId/clientId.
                 if     (Get-NodeValue $node 'certThumbprint') { $auth = 'Certificate';  $why = 'certThumbprint is set' }
                 elseif (Get-NodeValue $node 'clientSecret')   { $auth = 'ClientSecret'; $why = 'clientSecret is set' }
@@ -205,21 +177,18 @@ function Get-BasetuneConfig {
             try {
                 $node.clientSecret = Protect-Secret $stored
                 $configChanged = $true
-                Write-Log 'Config' "Plaintext clientSecret for '$label' encrypted in Config.json. Older backups may still contain it in plaintext" 'WARN'
+                Write-Log 'Config' "Plaintext Client Secret for '$label' encrypted in Config.json. Older backups may still contain it in plaintext" 'WARN'
             } catch {
-                Write-Log 'Config' "Could not encrypt clientSecret for '$label'. It stays in plaintext until the next start. See the log file for details" 'ERROR'
+                Write-Log 'Config' "Could not encrypt Client Secret. See Basetune.log for details" 'ERROR'
                 Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
             }
         }
     }
 
     # Write repairs / migrated secrets (best effort: a failed write is logged,
-    # the session goes on). Internal __* markers (__configError, __invalid,
-    # legacy __plaintextForSession) are left out of the payload.
-    if ($configChanged -or $legacyMarkersOnDisk) {
-        if ($legacyMarkersOnDisk -and -not $configChanged) {
-            Write-Log 'Config' "Removing old internal markers from Config.json (no effect on tenants)" 'INFO'
-        }
+    # the session goes on). The in-memory __* markers (__configError,
+    # __invalid) are left out of the payload.
+    if ($configChanged) {
         try {
             $cleanCfg = [ordered]@{}
             foreach ($p in $cfg.PSObject.Properties) {
@@ -247,7 +216,7 @@ function Get-BasetuneConfig {
             }
             $cleanCfg | ConvertTo-Json -Depth 8 | Out-File $Path -Encoding UTF8
         } catch {
-            Write-Log 'Config' "Could not write Config.json. See the log file for details" 'ERROR'
+            Write-Log 'Config' "Could not write Config.json. See Basetune.log for details" 'ERROR'
             Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
         }
     }
@@ -350,7 +319,7 @@ function Get-BasetuneOptions {
             Write-Log 'Config' "Options.json was not valid and has been replaced with default values" 'WARN'
             try { Save-BasetuneOptions -Path $Path -ReportPath $defaults.reportPath -Platforms $defaults.platforms -Theme $defaults.theme -MaxThreads $defaults.maxThreads }
             catch {
-                Write-Log 'Config' "Could not write Options.json. See the log file for details" 'ERROR'
+                Write-Log 'Config' "Could not write Options.json. See Basetune.log for details" 'ERROR'
                 Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
             }
             return (& $toResult $defaults)
@@ -366,12 +335,11 @@ function Get-BasetuneOptions {
             $rpCheck = Resolve-FolderPath -Path $rpRaw -BasePath $btRoot
             if ($rpCheck.Error) {
                 $opt.reportPath = $rpDefault; $write = $true
-                # Network paths (\\server\share) are not supported (UI and CLI).
-                $rpWhat = if ($rpRaw.Trim() -match '^[\\/]{2}') { 'Network report path (not supported)' } else { 'Invalid report path' }
-                Write-Log 'Config' "$rpWhat '$($rpRaw.Trim())' in Options.json. Set to default ($rpDefault)" 'WARN'
-            } elseif ($rpRaw.Trim() -match '^([A-Za-z]:|"|/)' -and $rpCheck.Path -ne $rpRaw) {
-                # Full path written back normalized (C:\Reports\ -> C:\Reports);
-                # relative paths stay as typed.
+                Write-Log 'Config' "Invalid report path '$($rpRaw.Trim())' in Options.json. Set to default ($rpDefault)" 'WARN'
+            } elseif ($rpRaw.Trim() -match '^([A-Za-z]:|"|/|\\\\)' -and $rpCheck.Path -ne $rpRaw) {
+                # Full or network path written back normalized (C:\Reports\ ->
+                # C:\Reports, \\server\share\x\ -> \\server\share\x); relative
+                # paths stay as typed.
                 $opt.reportPath = $rpCheck.Path; $write = $true
             } else {
                 $opt.reportPath = $rpRaw
@@ -428,7 +396,7 @@ function Get-BasetuneOptions {
     if ($write) {
         try { Save-BasetuneOptions -Path $Path -ReportPath $opt.reportPath -Platforms $opt.platforms -Theme $opt.theme -MaxThreads $opt.maxThreads }
         catch {
-            Write-Log 'Config' "Could not write Options.json. See the log file for details" 'ERROR'
+            Write-Log 'Config' "Could not write Options.json. See Basetune.log for details" 'ERROR'
             Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
         }
     }

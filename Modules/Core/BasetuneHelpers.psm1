@@ -26,9 +26,13 @@
 # One log entry. Label = the area the message is about (Compare, Source,
 # Config, ...): the Component column in CMTrace, not shown in the log view or
 # the console.
+# Replace: a per-item progress line ("[5/46] Expanded settings: x"). The log
+# view shows it only while it is the last line: the next line of any kind
+# takes its place (Add-UILogLines), so after the load only "Loaded 46
+# policies" stays. The console and the log file keep every line.
 function New-LogEntry {
-    param([string]$Label, [string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO')
-    return [pscustomobject]@{ Level = $Level; Label = $Label; Message = $Message }
+    param([string]$Label, [string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO', [string]$Replace = '')
+    return [pscustomobject]@{ Level = $Level; Label = $Label; Message = $Message; Replace = $Replace }
 }
 
 $script:LogCallback = $null
@@ -64,7 +68,7 @@ function Add-LogFileLine {
 
 function Get-LogSource { return $script:LogSource }
 
-# The Basetune version ("3.0.1"): ModuleVersion of BasetuneCore.psd1 (next to
+# The Basetune version ("3.0.2"): ModuleVersion of BasetuneCore.psd1 (next to
 # this file), read once. The manifest is the one place to change it.
 $script:BasetuneVersion = $null
 function Get-BasetuneVersion {
@@ -78,11 +82,11 @@ function Get-BasetuneVersion {
 }
 
 function Write-Log {
-    param([string]$Label, [string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO', [switch]$FileOnly)
+    param([string]$Label, [string]$Message, [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO', [switch]$FileOnly, [string]$Replace = '')
 
     # Write-Log '' '' → an empty entry: a blank line on the console, nothing
-    # in the log view or the log file.
-    $entry = New-LogEntry $Label $Message $Level
+    # in the log view or the log file. -Replace: see New-LogEntry.
+    $entry = New-LogEntry $Label $Message $Level -Replace $Replace
 
     # Log file, if set: CMTrace format (ConvertTo-CMTraceLine), best-effort.
     if ($script:LogFile) {
@@ -317,19 +321,17 @@ function Get-MaxThreadsRange {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Folder path validation — used for the report path (Config.json, -ReportPath,
-# Options window) and -ExportPath.
+# Folder path validation — used for the report path (Options.json,
+# -ReportPath, Options window) and -ExportPath.
 #
 # Returns [PSCustomObject]@{ Path; Error }:
 #   Path  — normalized full path (single backslashes, no trailing backslash
 #           except on a drive root such as C:\), or $null when invalid
 #   Error — reason the path is invalid, or $null
 #
-# Accepted:  C:\Reports, C:\Reports\,
+# Accepted:  C:\Reports, C:\Reports\, network paths (\\server\share\Reports),
 #            relative paths (Reports, .\Reports) when -BasePath is given
-# Rejected:  network paths (\\server\share): a share is not always available.
-#            Allowed with -AllowNetwork: base folder (Basetune or the current
-#            folder may be on a share) and the CLI -ExportPath.
+# Rejected:  \\server without a share,
 #            c:dddd / C: (drive-relative), \Reports (no drive), invalid
 #            characters, reserved names (CON, NUL, ...), a drive that does
 #            not exist on this PC
@@ -339,8 +341,7 @@ function Resolve-FolderPath {
     param(
         [string]$Path,
         [string]$BasePath = '',
-        [switch]$RequireAbsolute,
-        [switch]$AllowNetwork       # base folder and CLI -ExportPath (see above)
+        [switch]$RequireAbsolute
     )
 
     $fail = { param($m) [PSCustomObject]@{ Path = $null; Error = $m } }
@@ -356,13 +357,10 @@ function Resolve-FolderPath {
     $prefix  = ''
     $rest    = ''
 
-    if (-not $AllowNetwork -and $p -match '^\\\\') {
-        return & $fail "Network paths (\\server\share) are not supported. Use a local folder such as C:\Reports"
-    }
     if ($p -match '^\\\\') {
         # UNC: \\server\share[\...]
         if ($p -notmatch '^\\\\([^\\]+)\\+([^\\]+)(.*)$') {
-            return & $fail "'$orig' is not a complete network path. $example"
+            return & $fail "'$orig' is not a complete network path. Use a path such as \\server\share\Reports"
         }
         $srv = $Matches[1]; $share = $Matches[2]; $rest = $Matches[3]
         if ("$srv$share" -match '[<>"|?*:]') {
@@ -385,9 +383,9 @@ function Resolve-FolderPath {
         if ($RequireAbsolute -or -not $BasePath) {
             return & $fail "'$orig' is not a full path. $example"
         }
-        $base = Resolve-FolderPath -Path $BasePath -AllowNetwork
+        $base = Resolve-FolderPath -Path $BasePath
         if ($base.Error) { return & $fail "Base folder for '$orig' is not valid: $($base.Error)" }
-        return Resolve-FolderPath -Path ($base.Path.TrimEnd('\') + '\' + $p) -AllowNetwork
+        return Resolve-FolderPath -Path ($base.Path.TrimEnd('\') + '\' + $p)
     }
 
     # Check every folder name after the drive/share.
@@ -486,6 +484,11 @@ function Get-ValidPlatforms {
 # A policy WITHOUT a (known) platform is never loaded (the compare matches
 # settings per platform); counted under '__noplatform'. No platforms given =
 # no filter, but a platform is still required.
+# Add-OtherPlatformCount: counts one policy of another platform than selected,
+# without testing it for loading. The load and the export count every policy
+# of the tenant or folder this way, not only the name filter matches, so the
+# skip line shows the totals. A missing or unknown platform is not counted
+# here (the load reports it for the policies that pass the name filter).
 # Write-PlatformSkipLog: one line per reason, e.g.
 #   "Skipped 12 policies for other platforms (macOS: 8, iOS: 4)"
 #   "Skipped 3 policies without platform"
@@ -502,6 +505,15 @@ function Test-PolicyPlatform {
     $lbl = Get-PlatformLabel $key
     $Skipped[$lbl] = 1 + [int]$Skipped[$lbl]
     return $false
+}
+
+function Add-OtherPlatformCount {
+    param($PlatformsValue, [string[]]$Platforms, [hashtable]$Skipped)
+    if (-not $Platforms -or $Platforms.Count -eq 0) { return }
+    $key = Get-PlatformKey $PlatformsValue
+    if (-not $key -or $key -in $Platforms) { return }
+    $lbl = Get-PlatformLabel $key
+    $Skipped[$lbl] = 1 + [int]$Skipped[$lbl]
 }
 
 function Write-PlatformSkipLog {
@@ -530,7 +542,7 @@ function Write-PlatformSkipLog {
 #   deviceConfigurationPolicies  -> Template (Configuration > Templates)
 #   anything else                -> Other
 # No templateReference at all (older exports): Settings Catalog.
-# -EmptyWhenMissing (JSON tenants): templateReference missing or null = type
+# -EmptyWhenMissing (offline baselines): templateReference missing or null = type
 # unknown = empty label. One that IS there but empty ({}, empty
 # templateFamily, 'none') is still Settings Catalog.
 function Get-PolicyTypeLabel {
@@ -650,6 +662,7 @@ Export-ModuleMember -Function @(
     'Get-PlatformLabel',
     'Get-ValidPlatforms',
     'Test-PolicyPlatform',
+    'Add-OtherPlatformCount',
     'Write-PlatformSkipLog',
     'Get-PolicyTypeLabel',
     'Get-PlatformsText',

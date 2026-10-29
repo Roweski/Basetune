@@ -358,7 +358,10 @@ function Resolve-Category {
     if ($script:Resolve.CategoryById.ContainsKey($CategoryId)) {
         return $script:Resolve.CategoryById[$CategoryId]
     }
-    if (-not $Connection) {
+    # The context's connection wins over the one passed in: it holds the
+    # token refreshed below, the callers (Get-CategoryPath) may still pass
+    # the expired one.
+    if ($script:Resolve.Connection) {
         $Connection = $script:Resolve.Connection
     }
     # Skip entirely if no categories file loaded — API is only a fallback for unknown entries
@@ -368,11 +371,28 @@ function Resolve-Category {
     # No online tenant in the compare: nothing to fetch from. Warn once per run.
     if (-not $Connection -and -not $script:Resolve.CategoryNoTenantWarned) {
         $script:Resolve.CategoryNoTenantWarned = $true
-        Write-Log "Categories" "Unresolved categories will display as [Unknown Category]" "WARN"
+        Write-Log "Categories" "Categories not found in the definitions will display as [Unknown Category]" "WARN"
     }
     # CategoryApiOffline: set on the first network error of a run, so the other
     # missing categories get a placeholder at once instead of each waiting on
     # retries. One category is a tiny request: 10 sec timeout (default 30).
+    if ($Connection -and -not $script:Resolve.CategoryApiOffline) {
+        # Expired token (e.g. the compare runs an hour after the load): signed
+        # in again once, and the new connection is kept for the other missing
+        # categories of this compare. A failed sign-in stops the fetches for
+        # this compare, as a network error does.
+        try {
+            $fresh = Update-GraphConnection $Connection
+            if (-not [object]::ReferenceEquals($fresh, $Connection)) {
+                $Connection = $fresh
+                if ($script:Resolve.Connection) { $script:Resolve.Connection = $fresh }
+            }
+        } catch {
+            $script:Resolve.CategoryApiOffline = $true
+            Write-Log "Categories" "Could not sign in again: missing categories are shown as [Unknown Category]. See Basetune.log for details" "WARN"
+            Write-Log "Categories" "Details: $($_.Exception.Message)" "WARN" -FileOnly
+        }
+    }
     if ($Connection -and -not $script:Resolve.CategoryApiOffline) {
         try {
             $uri      = "https://graph.microsoft.com/beta/deviceManagement/configurationCategories/$CategoryId"
@@ -394,7 +414,7 @@ function Resolve-Category {
                 Write-Log "Categories" "Network unavailable: missing categories cannot be fetched and are shown as [Unknown Category]" "WARN"
             }
             else {
-                Write-Log "Categories" "Could not fetch category '$CategoryId' from the API. See the log file for details" "WARN"
+                Write-Log "Categories" "Could not fetch category '$CategoryId' from the API. See Basetune.log for details" "WARN"
                 Write-Log "Categories" "Details: $($_.Exception.Message)" "WARN" -FileOnly
             }
         }
@@ -1049,7 +1069,7 @@ function Merge-CollectionSettings {
 
 # The different settings in the compare without a setting definition (shown
 # with their DefinitionId instead of a name), each with the policies that hold
-# it, for the log line and compare.log. Instance keys (baseId@@ruleName) and
+# it, for the log line and Compare.log. Instance keys (baseId@@ruleName) and
 # key/value ids (id||key) count by their base id. Sorted on id.
 # Returns a list of @{ DefinitionId; Policies = list of @{ Side; Name } }
 # (Side 'Source' / 'Target', each policy once), empty when definitions are

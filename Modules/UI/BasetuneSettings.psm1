@@ -8,7 +8,7 @@
 
 # Controls of the main and config window, by x:Name (BasetuneState.psm1).
 $script:UI = (Get-BasetuneContext).UI
-# Paths, config, tenants and form state (initialised in Basetune.ps1).
+# Paths, config, tenants and form state (initialised in BasetuneUI.ps1).
 $script:AppState = (Get-BasetuneContext).State
 
 # ── Helpers: dropdown population ─────────────────────────────────────────────
@@ -35,7 +35,7 @@ function script:New-TenantComboItem {
     $item = [System.Windows.Controls.ComboBoxItem]::new()
     $item.Content = $Content
     $item.Tag     = $Tag
-    # JSON tenants use the same text colour as the others (theme TextBrush).
+    # Offline baselines use the same text colour as the others (theme TextBrush).
     return $item
 }
 
@@ -81,6 +81,7 @@ function Import-Config {
     $configPath = "$($AppState.ScriptRoot)\Config\Config.json"
     $AppState.tenantStore.Clear()
     $AppState.configLoadError = $null
+    $AppState.configLoadErrorDetail = $null   # the parse error, for the Details line (also on Save)
     $AppState.configReadFailed = $false   # invalid/unreadable: no "No tenants found" at startup
 
     if (Test-Path $configPath) {
@@ -92,6 +93,7 @@ function Import-Config {
             # unreadable file with an empty config.
             if ($AppState.cfg.PSObject.Properties['__configError'] -and $AppState.cfg.__configError) {
                 $AppState.configLoadError = $AppState.cfg.__configError
+                if ($AppState.cfg.PSObject.Properties['__configErrorDetail']) { $AppState.configLoadErrorDetail = $AppState.cfg.__configErrorDetail }
                 $AppState.configReadFailed = $true
                 if (-not $Quiet) {
                     Write-Log 'Config' "$($AppState.cfg.__configError)" 'ERROR'
@@ -110,7 +112,7 @@ function Import-Config {
             }
         } catch {
             $AppState.configReadFailed = $true
-            $msg = "Could not read Config.json. See the log file for details"
+            $msg = "Could not read Config.json. See Basetune.log for details"
             try {
                 Write-Log 'Config' $msg 'ERROR'
                 Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
@@ -124,7 +126,7 @@ function Import-Config {
             Save-Config
             Write-Log 'Config' 'Config.json created with default values' 'INFO' -FileOnly
         } catch {
-            Write-Log 'Config' "Could not write Config.json. See the log file for details" 'ERROR'
+            Write-Log 'Config' "Could not write Config.json. See Basetune.log for details" 'ERROR'
             Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
         }
     }
@@ -140,10 +142,22 @@ function Update-ConfigDropdowns {
     }
 }
 
+# PreferSrcTag / PreferTgtTag: the tenant to keep selected. Removed in Tenant
+# Configuration: the tenant at its old position (-PrevSrcIndex /
+# -PrevTgtIndex, the index in the list before the save) is selected, i.e.
+# the next one, or the new last one when the removed tenant was last; the
+# same rule as the tenant list in Tenant Configuration. No index: the first.
 function Sync-MainTenantDropdowns {
-    param([string]$PreferSrcTag = '', [string]$PreferTgtTag = '')
-    $selSrc = if ($PreferSrcTag -and $AppState.tenantStore.Contains($PreferSrcTag)) { $PreferSrcTag } else { '' }
-    $selTgt = if ($PreferTgtTag -and $AppState.tenantStore.Contains($PreferTgtTag)) { $PreferTgtTag } else { '' }
+    param([string]$PreferSrcTag = '', [string]$PreferTgtTag = '', [int]$PrevSrcIndex = -1, [int]$PrevTgtIndex = -1)
+    $sortedKeys = @(Get-SortedTenantKeys)
+    $pick = {
+        param([string]$Tag, [int]$Index)
+        if ($Tag -and $AppState.tenantStore.Contains($Tag)) { return $Tag }
+        if ($Tag -and $Index -ge 0 -and $sortedKeys.Count -gt 0) { return [string]$sortedKeys[[math]::Min($Index, $sortedKeys.Count - 1)] }
+        return ''
+    }
+    $selSrc = & $pick $PreferSrcTag $PrevSrcIndex
+    $selTgt = & $pick $PreferTgtTag $PrevTgtIndex
     Add-TenantItemsToDropdown $UI.cmbSourceTenant $selSrc
     Add-TenantItemsToDropdown $UI.cmbTargetTenant $selTgt
     # Placeholder "No tenants configured..." only when there are no tenants
@@ -173,7 +187,7 @@ function Select-ComboByTag {
 function Save-Config {
     if ($AppState.configLoadError) {
         # Config.json could not be read at startup: writing now would overwrite
-        # it and lose the tenants. Callers append what was not saved.
+        # it and lose the tenants. Callers log this message as it is.
         throw "$($AppState.configLoadError)"
     }
     $configPath = "$($AppState.ScriptRoot)\Config\Config.json"

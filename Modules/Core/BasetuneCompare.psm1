@@ -351,16 +351,22 @@ function Invoke-BaselineCompare {
 
     # Same name on one side (a copy in Intune): shown with the id. Listed at
     # the end. The "Read 1240 settings from 45 source policies" line comes
-    # after the merge, so it shows the result.
+    # after the merge, so it shows the result. "Retrieving settings from ..."
+    # comes before it: flattening hundreds of policies takes seconds (animated
+    # in the UI log view, UILogAnimRegex).
     $srcNames = Get-PolicyDisplayNames -Policies $SourcePolicies
     $tgtNames = Get-PolicyDisplayNames -Policies $TargetPolicies
 
+    Write-Log "Compare" "Retrieving settings from source policies..." "INFO"
     $sourceFlat = @(foreach ($p in $SourcePolicies) {
         if ($p.Settings) { ConvertTo-SettingObjects -Policy $p -Source 'Source' -PolicyName $srcNames.Names[[string]$p.PolicyId] }
     })
     $sourceFlat = @(Merge-CollectionSettings -Settings $sourceFlat)
     Write-Log "Compare" (Format-ReadSettingsLine $sourceFlat.Count $SourcePolicies.Count 'source') "INFO"
 
+    if ($TargetPolicies.Count -gt 0) {
+        Write-Log "Compare" "Retrieving settings from target policies..." "INFO"
+    }
     $targetFlat = @(foreach ($p in $TargetPolicies) {
         if ($p.Settings) { ConvertTo-SettingObjects -Policy $p -Source 'Target' -PolicyName $tgtNames.Names[[string]$p.PolicyId] }
     })
@@ -377,24 +383,33 @@ function Invoke-BaselineCompare {
     Write-Log "Compare" "Comparing settings..." "INFO"
     $diff = @(Compare-RawSettings -Source $sourceFlat -Target $targetFlat)
     $diff = @(Add-IssueColumn -Diff $diff)
+    # Right after the compare: the statuses are final here, the resolve below
+    # only adds names. The count is the compare rows, before
+    # Merge-EnabledWithChildren joins parent and child rows ("Saved Diff.csv
+    # (n rows)" gives the rows written).
+    Write-Log "Compare" "Comparison complete ($($diff.Count) rows processed)"
 
     # ── 4. Resolve ────────────────────────────────────────────────────────────
     # Categories need definitions (the category id comes from the definition).
     #   both:             Resolving display names and categories...
-    #   definitions only: Skipping categories... / Resolving display names...
-    #   no definitions:   Skipping display names and categories...
+    #                     Display names and categories resolved
+    #   definitions only: Resolving display names...
+    #                     Display names resolved
+    #   no definitions:   Skipping display names and categories (no progress:
+    #                     nothing runs, so no "...")
     if ($bHasDefinitions) {
         if ($bHasCategories) {
             Write-Log "Compare" "Resolving display names and categories..." "INFO"
         } else {
-            Write-Log "Compare" "Skipping categories..." "INFO"
             Write-Log "Compare" "Resolving display names..." "INFO"
         }
         $resolved = @(Resolve-DiffSettings -Diff $diff)
         $resolved = @(Merge-EnabledWithChildren -Resolved $resolved)
         $unresolved = @(Get-UnresolvedDefinitions -Diff $diff)
+        $doneText = if ($bHasCategories) { 'Display names and categories resolved' } else { 'Display names resolved' }
+        Write-Log "Compare" $doneText "INFO"
     } else {
-        Write-Log "Compare" "Skipping display names and categories..." "INFO"
+        Write-Log "Compare" "Skipping display names and categories" "INFO"
         $resolved = @($diff | ForEach-Object {
             [PSCustomObject]@{
                 DefinitionId     = $_.DefinitionId
@@ -412,7 +427,6 @@ function Invoke-BaselineCompare {
             }
         })
     }
-    # Row count is logged with "Comparison complete: n rows processed" below.
 
     # Categories fetched from the API go back into the caller's table (UI
     # session cache), so the next compare does not fetch them again.
@@ -442,7 +456,7 @@ function Invoke-BaselineCompare {
             Move-Item -LiteralPath $tmp -Destination $rc.CategoriesFilePath -Force
             Write-Log "Categories" "Saved $($rc.CategoryFetchedCount) extra categories to $(Split-Path $rc.CategoriesFilePath -Leaf) ($($toSave.Count))"
         } catch {
-            Write-Log "Categories" "Could not update categories cache file. See the log file for details" "WARN"
+            Write-Log "Categories" "Could not update categories cache file. See Basetune.log for details" "WARN"
             Write-Log "Categories" "Details: $($_.Exception.Message)" "WARN" -FileOnly
         }
     }
@@ -464,7 +478,6 @@ function Invoke-BaselineCompare {
     # one line; the cause goes to the log file. A progress line before the CSV
     # files and before the HTML report: each takes seconds on a large set
     # (dots animate in the UI, see UILogAnimRegex in BasetuneLogView.psm1).
-    #   Comparison complete: 958 rows processed
     #   Report folder: C:\reports\Src_Tgt\20261010_113304
     #   Exporting CSV reports...
     #   (log file only: CSV separator: ';' (Windows list separator))
@@ -473,7 +486,6 @@ function Invoke-BaselineCompare {
     #   Exporting HTML report...
     #   Created C:\reports\...\Report.html (522 settings)   (Get-HtmlReport)
     # The view shows the file names only, as links (Add-UILogLines).
-    Write-Log "Compare" "Comparison complete: $($resolved.Count) rows processed"
     Write-Log "Report" "Report folder: $ExportPath" "INFO"
     Write-Log "Report" "Exporting CSV reports..." "INFO"
     Write-Log 'Report' ("CSV separator: '$csvSep'" + $(if ("$csvSep" -eq $winSep) { ' (Windows list separator)' } else { " (Windows list separator '$winSep' is not supported)" })) 'INFO' -FileOnly
@@ -511,20 +523,24 @@ function Invoke-BaselineCompare {
             }
         }
         $csvRows | Export-Csv $diffCsv -NoTypeInformation -Encoding utf8BOM -Delimiter $csvSep -ErrorAction Stop
-        Write-Log "Report" "Created $diffCsv ($($resolved.Count) rows)"
+        Write-Log "Report" "Saved $diffCsv ($($resolved.Count) rows)"
 
         Get-BaselineSummary -Rows $resolved |
             Export-Csv $summaryCsv -NoTypeInformation -Encoding utf8BOM -Delimiter $csvSep -ErrorAction Stop
-        Write-Log "Report" "Created $summaryCsv"
+        Write-Log "Report" "Saved $summaryCsv"
 
         $htmlOutputPath = if ($ReportFile) { $ReportFile } else { Join-Path $ExportPath 'Report.html' }
         Write-Log "Report" "Exporting HTML report..." "INFO"
         $reportSettings = Get-HtmlReport -Rows $resolved -OutputPath $htmlOutputPath -SourceLabel $SourceLabel -TargetLabel $TargetLabel -Theme $ReportTheme
     } catch {
-        Write-Log "Compare" "Could not write the comparison data. See the log file for details" "ERROR"
+        Write-Log "Compare" "Could not write the comparison data. See Basetune.log for details" "ERROR"
         Write-Log "Compare" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
         return [PSCustomObject]@{ Success = $false; Logged = $true }
     }
+    # Right after "Saved ...\Report.html", before the warning lines below.
+    # The UI puts its "Policy selection changed ..." note after this line
+    # (BasetuneLogView) and turns the report buttons on when the job is done.
+    Write-Log "Report" "All reports created successfully" "INFO"
 
     # Settings of an unknown type (not compared) and policies with the same
     # name on one side (Get-PolicyDisplayNames).
@@ -540,12 +556,12 @@ function Invoke-BaselineCompare {
         foreach ($d in $tgtIds.Duplicates) { [PSCustomObject]@{ Side = 'Target'; Name = $d.Name; PolicyId = $d.PolicyId; Key = $d.Key; DisplayName = $tgtNames.Names[$d.Key] } }
     )
 
-    # ── 5b. compare.log ───────────────────────────────────────────────────────
+    # ── 5b. Compare.log ───────────────────────────────────────────────────────
     # Next to the report: the compared policies, then the four warning blocks
     # (only when any; their heading line, "Policies with ...: <n>", is also the
     # WARN line in the view, see below), then what was created. No log lines.
     # A write error does not undo the report.
-    $compareLog = Join-Path $ExportPath 'compare.log'
+    $compareLog = Join-Path $ExportPath 'Compare.log'
     # Each block kept as its own list (the unary comma stops PowerShell from
     # joining them).
     $warnBlocks = @(
@@ -555,7 +571,7 @@ function Invoke-BaselineCompare {
         , @(Format-SkippedSettingList -SkippedSettings $skippedSettings)
     )
     try {
-        # In compare.log the warning headings start with "WARNING: " (CMTrace
+        # In Compare.log the warning headings start with "WARNING: " (CMTrace
         # and other log viewers mark lines with "warn" in them); the view
         # line has no prefix (it is a WARN line there already).
         $blocks = @(
@@ -564,7 +580,7 @@ function Invoke-BaselineCompare {
                 if ($b.Count -eq 0) { , @(); continue }
                 , @(@("WARNING: $($b[0])") + @($b | Select-Object -Skip 1))
             }
-            , @("Created Diff.csv ($($resolved.Count) rows)", "Created Report.html ($reportSettings settings)")
+            , @("Saved Diff.csv ($($resolved.Count) rows)", "Saved Report.html ($reportSettings settings)")
         )
         # An empty line between the blocks that have lines.
         $lines = [System.Collections.Generic.List[string]]::new()
@@ -575,18 +591,18 @@ function Invoke-BaselineCompare {
         }
         Set-Content -LiteralPath $compareLog -Value $lines -Encoding utf8 -ErrorAction Stop
     } catch {
-        Write-Log "Compare" "Could not write compare.log. See the log file for details" "WARN"
+        Write-Log "Compare" "Could not write Compare.log. See Basetune.log for details" "WARN"
         Write-Log "Compare" "Details: $($_.Exception.Message)" "WARN" -FileOnly
     }
 
     # One WARN line per warning block, its heading with the number of policies
-    # (the list itself is in compare.log only):
-    #   Policies with duplicate IDs: 2. See compare.log for details
-    #   Policies with duplicate names: 2. See compare.log for details
-    #   Policies with unresolved settings (missing setting definitions): 2. See compare.log for details
-    #   Policies with unknown setting types (not compared): 1. See compare.log for details
+    # (the list itself is in Compare.log only):
+    #   Policies with duplicate IDs: 2. See Compare.log for details
+    #   Policies with duplicate names: 2. See Compare.log for details
+    #   Policies with unresolved settings (missing setting definitions): 2. See Compare.log for details
+    #   Policies with unknown setting types (not compared): 1. See Compare.log for details
     foreach ($b in $warnBlocks) {
-        if ($b.Count -gt 0) { Write-Log "Compare" "$($b[0]). See compare.log for details" "WARN" }
+        if ($b.Count -gt 0) { Write-Log "Compare" "$($b[0]). See Compare.log for details" "WARN" }
     }
     # Settings without a definition (new in Intune since the definitions were
     # downloaded, or removed by Microsoft). DownloadSuggested: there are such
@@ -602,7 +618,7 @@ function Invoke-BaselineCompare {
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPARE.LOG BLOCKS
-# The lists of compare.log, each only when it has items. Indent: 2 spaces for
+# The lists of Compare.log, each only when it has items. Indent: 2 spaces for
 # a group (a policy, an id or a name), 4 for its items. Source groups first,
 # then target; groups and items sorted.
 #   Policies with unknown setting types (not compared):
@@ -649,7 +665,8 @@ function script:Format-LogGroups {
             if ($EmptyLineBetween -and -not $first) { '' }
             $first = $false
             "  $side $($Label): $(& $GroupText $g)"
-            foreach ($line in ($groups[$g] | Sort-Object)) { "    $line" }
+            # Sorted without the quotes: 'Name' before 'Name 2'.
+            foreach ($line in ($groups[$g] | Sort-Object { $_.Trim("'") })) { "    $line" }
         }
     }
 }
@@ -718,9 +735,9 @@ function Resolve-DuplicatePolicyIds {
 function Format-SameIdPolicyList {
     param([AllowNull()][AllowEmptyCollection()][array]$SameIdPolicies)
     $items = @(foreach ($d in @($SameIdPolicies | Where-Object { $_ })) {
-        # The name in the report is "<name> (<key>)"; another name is shown too.
-        $shown = if ($d.DisplayName -ceq "$($d.Name) ($($d.Key))") { "'$($d.DisplayName)'" } else { "'$($d.Name)' shown as '$($d.DisplayName)'" }
-        [PSCustomObject]@{ Side = $d.Side; Group = ([string]$d.PolicyId).ToLowerInvariant(); Item = $shown }
+        # As in the report: "<name>", or "<name> (<key>)" for a copy with the
+        # same name too (Get-PolicyDisplayNames).
+        [PSCustomObject]@{ Side = $d.Side; Group = ([string]$d.PolicyId).ToLowerInvariant(); Item = "'$($d.DisplayName)'" }
     })
     if ($items.Count -eq 0) { return }
     "Policies with duplicate IDs: $($items.Count)"
@@ -743,11 +760,13 @@ function Format-SameNamePolicyList {
 # full id after the name:
 #     FED306 - test (fc96b86b-65b8-4a1a-915c-a5acb84a196d)
 #     FED306 - test (7d3c2b1a-0f4e-4c5d-9a8b-6e7f80912345)
-# Policies that share an id (key "<id>#n", Resolve-DuplicatePolicyIds) are
-# all shown with it, also when their names differ:
+# A copy with the same name AND id (key "<id>#n", Resolve-DuplicatePolicyIds)
+# shows that key:
 #     test (fc96b86b-65b8-4a1a-915c-a5acb84a196d)
-#     Test 2 (fc96b86b-65b8-4a1a-915c-a5acb84a196d#2)
-# Other names stay as they are. Per side: a source and a target policy with
+#     test (fc96b86b-65b8-4a1a-915c-a5acb84a196d#2)
+# Policies that only share an id ("Test 2" / "Test 4") keep their names: they
+# are already told apart; Compare.log lists the shared id. Other names stay as
+# they are. Per side: a source and a target policy with
 # the same name is normal (a tenant compared with itself).
 # Returns @{ Names = @{ <PolicyId> = <display name> }; Duplicates = list of
 # @{ Name; PolicyId; DisplayName } } for the policies with the same name
@@ -759,19 +778,12 @@ function Get-PolicyDisplayNames {
     $names = @{}
     $dups  = [System.Collections.Generic.List[object]]::new()
 
-    # Real ids (without "#n") that more than one policy has; not case sensitive.
-    $idCount = @{}
-    foreach ($p in $all) {
-        $real = ([string]$p.PolicyId) -replace '#\d+$', ''
-        if ($real) { $idCount[$real] = 1 + [int]$idCount[$real] }
-    }
 
     foreach ($g in ($all | Group-Object { [string]$_.Name } -CaseSensitive)) {
         $sameName = $g.Count -gt 1
         foreach ($p in ($g.Group | Sort-Object { [string]$_.PolicyId })) {
-            $id       = [string]$p.PolicyId
-            $sharedId = $idCount[($id -replace '#\d+$', '')] -gt 1
-            $dn       = if ($sameName -or $sharedId) { "$($p.Name) ($id)" } else { [string]$p.Name }
+            $id = [string]$p.PolicyId
+            $dn = if ($sameName) { "$($p.Name) ($id)" } else { [string]$p.Name }
             $names[$id] = $dn
             if ($sameName) { $dups.Add([PSCustomObject]@{ Name = [string]$p.Name; PolicyId = $id; DisplayName = $dn }) }
         }
@@ -791,7 +803,7 @@ function Format-SkippedSettingList {
 }
 # ─────────────────────────────────────────────────────────────────────────────
 # COMPARED POLICIES
-# The compared policies, for the end of compare.log (too long for the view):
+# The compared policies, for the end of Compare.log (too long for the view):
 #   Source policies (2):
 #     Baseline - macOS (macOS)
 #     Baseline - Windows (Windows)

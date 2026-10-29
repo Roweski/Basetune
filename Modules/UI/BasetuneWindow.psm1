@@ -143,7 +143,7 @@ function Set-LogToggleRotation {
 
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
-# Title bar, window and log view handlers. Called once from Basetune.ps1,
+# Title bar, window and log view handlers. Called once from BasetuneUI.ps1,
 # after the main window is loaded and its controls registered.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-BasetuneWindow {

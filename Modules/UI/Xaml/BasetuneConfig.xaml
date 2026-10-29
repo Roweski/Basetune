@@ -132,10 +132,12 @@
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
                                     <TextBlock Style="{StaticResource FL}" Text="Authentication Method"/>
+                                    <!-- Content = the text shown, Tag = the authMethod value in Config.json
+                                         (Get-TenantFormAuthMethod reads the Tag). -->
                                     <ComboBox x:Name="cfgTenantAuthMethod" Padding="10,0,0,0">
-                                        <ComboBoxItem Content="ClientSecret" IsSelected="True"/>
-                                        <ComboBoxItem Content="Certificate"/>
-                                        <ComboBoxItem Content="None (JSON)"/>
+                                        <ComboBoxItem Content="Client Secret" Tag="ClientSecret" IsSelected="True"/>
+                                        <ComboBoxItem Content="Certificate" Tag="Certificate"/>
+                                        <ComboBoxItem Content="None (JSON)" Tag="None"/>
                                     </ComboBox>
                                 </StackPanel>
                             </Grid>

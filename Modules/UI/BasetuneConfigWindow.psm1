@@ -14,6 +14,8 @@ $script:AppState = (Get-BasetuneContext).State
 # ═════════════════════════════════════════════════════════════════════════════
 # Unsaved changes in the window: enables / disables Save.
 $script:hasUnsavedChanges = $false
+# Folder of a new offline baseline created by the current Save (logged by it).
+$script:cfgCreatedFolder = $null
 
 # Placeholder in the tenant dropdown while nothing is selected:
 # "Add your first tenant below..." without tenants, "Enter tenant details
@@ -71,9 +73,9 @@ function Reset-TenantFormState {
 }
 
 # Snapshot of the saved tenants, to log what a Save changed:
-#   Created tenant 'x' with authentication method 'ClientSecret'.
-#   Removed tenant 'y'.
-#   Updated tenant 'z'.
+#   Saved online tenant 'x' with authentication method 'Client Secret'
+#   Saved offline baseline 'y'
+#   Removed online tenant 'z'   /   Removed offline baseline 'z'
 # (Get-TenantSnapshot below; Reset-ChangedSides first.)
 
 # After a save or closing this window the main dropdowns are filled again
@@ -125,16 +127,24 @@ function Test-TenantStoreChanged {
 # shows it right away, typing removes it (also "Path not found"). Which
 # fields are required depends on the authentication method, same rules
 # as Save-TenantForm. Save checks everything again anyway.
+# The authMethod value (ClientSecret / Certificate / None) of the selected
+# item in the form: its Tag, not the text shown ("Client Secret", "None (JSON)").
+function Get-TenantFormAuthMethod {
+    $item = $UI.cfgTenantAuthMethod.SelectedItem
+    if ($item -and $item.Tag) { return [string]$item.Tag }
+    return 'ClientSecret'
+}
+
 function Test-TenantFieldRequired {
     param([string]$Name)
-    $auth = if ($UI.cfgTenantAuthMethod.SelectedItem) { "$($UI.cfgTenantAuthMethod.SelectedItem.Content)" } else { 'ClientSecret' }
+    $auth = Get-TenantFormAuthMethod
     switch ($Name) {
         'DisplayName'  { return $true }
-        'TenantId'     { return $auth -ne 'None (JSON)' }
-        'ClientId'     { return $auth -ne 'None (JSON)' }
+        'TenantId'     { return $auth -ne 'None' }
+        'ClientId'     { return $auth -ne 'None' }
         'ClientSecret' { return $auth -eq 'ClientSecret' }
         'CertThumb'    { return $auth -eq 'Certificate' }
-        'JsonPath'     { return $auth -eq 'None (JSON)' }
+        'JsonPath'     { return $auth -eq 'None' }
     }
     return $false
 }
@@ -240,13 +250,7 @@ function Save-TenantForm {
         $valid = $false
     }
 
-    $authSel = if ($UI.cfgTenantAuthMethod.SelectedItem) {
-        $UI.cfgTenantAuthMethod.SelectedItem.Content } else { 'ClientSecret' }
-    $authMethod = switch ($authSel) {
-        'Certificate' { 'Certificate' }
-        'None (JSON)' { 'None' }
-        default       { 'ClientSecret' }
-    }
+    $authMethod = Get-TenantFormAuthMethod
 
     if ($authMethod -ne 'None') {
         if (-not $UI.cfgTenantTenantId.Text.Trim())  { Show-Required 'TenantId';     $valid = $false }
@@ -279,7 +283,7 @@ function Save-TenantForm {
             try {
                 $node.clientSecret = Protect-Secret ((Get-TenantSecretFromForm).Trim())
             } catch {
-                Write-Log 'Config' 'Could not encrypt the client secret. See the log file for details' 'ERROR'
+                Write-Log 'Config' 'Could not encrypt Client Secret. See Basetune.log for details' 'ERROR'
                 Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
                 Show-Required 'ClientSecret'
                 return $false
@@ -292,14 +296,18 @@ function Save-TenantForm {
         if (-not $typedPath) { Show-Required 'JsonPath'; return $false }
         # Network folders (\\server\share) are accepted: IsPathRooted is true for them.
         if (-not [System.IO.Path]::IsPathRooted($typedPath)) { Show-PathNotFound 'JsonPath'; return $false }
-        $isExisting = [bool]$AppState.editingTenantKey
-        if ($isExisting) {
-            # Existing tenant: the path must exist. A missing one (renamed,
-            # deleted) is not created silently; the user fixes it.
-            if (-not (Test-Path $typedPath)) { Show-PathNotFound 'JsonPath'; return $false }
-        } else {
-            # New tenant — create the folder if it doesn't exist yet.
-            try { New-Item -ItemType Directory -Path $typedPath -Force | Out-Null } catch { Show-PathNotFound 'JsonPath'; return $false }
+        # The saved folder of an existing baseline, unchanged in the form: it
+        # must exist. A missing one (renamed, deleted, drive gone) is not
+        # created silently; the user fixes it. A new baseline, or a folder
+        # typed in for an existing one: a missing folder is created, logged by
+        # the Save click as "Created folder: ..." (after it clears the log view).
+        $savedNode = if ($AppState.editingTenantKey) { $AppState.tenantStore[$AppState.editingTenantKey] } else { $null }
+        $savedPath = if ($savedNode) { [string](Get-NodeValue $savedNode 'path') } else { '' }
+        $unchanged = $savedPath -and ($savedPath.Trim() -eq $typedPath)
+        if (-not (Test-Path -LiteralPath $typedPath -PathType Container)) {
+            if ($unchanged) { Show-PathNotFound 'JsonPath'; return $false }
+            try { New-Item -ItemType Directory -Path $typedPath -Force -ErrorAction Stop | Out-Null } catch { Show-PathNotFound 'JsonPath'; return $false }
+            $script:cfgCreatedFolder = $typedPath
         }
         $node.path = $typedPath
     }
@@ -322,11 +330,10 @@ function Show-TenantForm {
 
 # ── Auth field visibility ─────────────────────────────────────────────────────
 function Update-TenantAuthFields {
-    $sel      = if ($UI.cfgTenantAuthMethod.SelectedItem) {
-        $UI.cfgTenantAuthMethod.SelectedItem.Content } else { 'ClientSecret' }
+    $sel      = Get-TenantFormAuthMethod
     $isSecret = $sel -eq 'ClientSecret'
     $isCert   = $sel -eq 'Certificate'
-    $isNone   = $sel -eq 'None (JSON)'
+    $isNone   = $sel -eq 'None'
 
     # Hidden (not Collapsed) for None (JSON): the rows keep their space, so the
     # window keeps the height of the ClientSecret / Certificate form.
@@ -402,6 +409,35 @@ function Start-AddTenant {
 # ═════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION WINDOW
 # ═════════════════════════════════════════════════════════════════════════════
+# Reads Config.json again (quietly) and brings the main window's source and
+# target lists up to date: on closing Tenant Configuration, and on opening it
+# when Config.json could not be read before (a file fixed meanwhile).
+# -ReportError: a Config.json that can no longer be read (made invalid while
+# the window was open) is reported in the log view; the lists are empty then.
+function Update-MainTenantsFromConfig {
+    param([switch]$ReportError)
+    $prevSrcTag = if ($UI.cmbSourceTenant.SelectedItem) { $UI.cmbSourceTenant.SelectedItem.Tag } else { '' }
+    $prevTgtTag = if ($UI.cmbTargetTenant.SelectedItem) { $UI.cmbTargetTenant.SelectedItem.Tag } else { '' }
+    # Positions in the main lists before the reload: a removed tenant is
+    # replaced by the one at its position (Sync-MainTenantDropdowns).
+    $prevSrcIdx = $UI.cmbSourceTenant.SelectedIndex
+    $prevTgtIdx = $UI.cmbTargetTenant.SelectedIndex
+    Import-Config -Quiet
+    $AppState.suppressEvents = $true
+    Sync-MainTenantDropdowns -PreferSrcTag $prevSrcTag -PreferTgtTag $prevTgtTag -PrevSrcIndex $prevSrcIdx -PrevTgtIndex $prevTgtIdx
+    $AppState.suppressEvents = $false
+    $AppState.lastSourceTenantKey = if ($UI.cmbSourceTenant.SelectedItem) { $UI.cmbSourceTenant.SelectedItem.Tag } else { $null }
+    $AppState.lastTargetTenantKey = if ($UI.cmbTargetTenant.SelectedItem) { $UI.cmbTargetTenant.SelectedItem.Tag } else { $null }
+    Reset-ChangedSides -PrevSrcTag $prevSrcTag -PrevTgtTag $prevTgtTag
+    Update-ExportButtons
+    Update-EmptyState 'Source'; Update-EmptyState 'Target'
+    if ($ReportError -and $AppState.configReadFailed) {
+        $msg = if ($AppState.configLoadError) { "$($AppState.configLoadError)" } else { 'Could not read Config.json. See Basetune.log for details' }
+        Write-UILog 'Config' $msg 'ERROR'
+        if ($AppState.configLoadErrorDetail) { Write-Log 'Config' "Details: $($AppState.configLoadErrorDetail)" 'ERROR' -FileOnly }
+    }
+}
+
 function Open-ConfigWindow {
     $cfgWindow = Import-Xaml -Path "$($AppState.XamlPath)\BasetuneConfig.xaml" -Width 820 -Height 600
     $cfgWindow.Owner = $UI.Window
@@ -439,6 +475,22 @@ function Open-ConfigWindow {
 
     # Unsaved changes tracking: a new window starts clean.
     $script:hasUnsavedChanges = $false
+
+    # Config.json could not be read before (startup or the last reload): read
+    # it again, so a file fixed meanwhile shows its tenants here and in the
+    # main window right away. Still not readable: the error again, so the
+    # empty list has its reason.
+    if ($AppState.configReadFailed) {
+        Update-MainTenantsFromConfig
+        if ($AppState.configReadFailed) {
+            $msg = if ($AppState.configLoadError) { "$($AppState.configLoadError)" } else { 'Could not read Config.json. See Basetune.log for details' }
+            Clear-UILog 'Config' $msg 'ERROR'
+            if ($AppState.configLoadErrorDetail) { Write-Log 'Config' "Details: $($AppState.configLoadErrorDetail)" 'ERROR' -FileOnly }
+        } else {
+            $n = @($AppState.tenantStore.Keys).Count
+            Clear-UILog 'Config' "Loaded $n $(if ($n -eq 1) { 'tenant' } else { 'tenants' }) from Config.json"
+        }
+    }
 
     Update-ConfigDropdowns
 
@@ -647,7 +699,7 @@ function Open-ConfigWindow {
                 if ($null -eq $secretValue) {
                     $secretValue = ''
                     $lblName = if ($node.displayName) { $node.displayName } else { $key }
-                    Write-Log 'Config' "Could not decrypt the client secret for '$lblName' (encrypted by another Windows user or on another PC). Enter the secret again" 'ERROR'
+                    Write-Log 'Config' "Could not decrypt the Client Secret for '$lblName' (encrypted by another Windows user or on another PC). Enter the secret again" 'ERROR'
                 }
             }
             if ($UI.cfgTenantClientSecret)      { $UI.cfgTenantClientSecret.Password = $secretValue }
@@ -678,22 +730,67 @@ function Open-ConfigWindow {
         $sel = $UI.lstTenants.SelectedItem
         if (-not $sel) { return }
         $key = $sel.Tag
+        # Remember the position: afterwards the tenant that moved into it
+        # (the next one) is selected, or the new last one when the removed
+        # tenant was last. Not the first: the user keeps their place.
+        $pos = $UI.lstTenants.SelectedIndex
         $AppState.tenantStore.Remove($key)
         if ($AppState.editingTenantKey -eq $key) { $AppState.editingTenantKey = $null }
         Update-ConfigDropdowns
-        Reset-TenantFormState
+        $count   = $UI.lstTenants.Items.Count
+        $nextKey = if ($count -gt 0 -and $pos -ge 0) { [string]$UI.lstTenants.Items[[math]::Min($pos, $count - 1)].Tag } else { '' }
+        Reset-TenantFormState -SelectKey $nextKey
         Set-UnsavedChanges
     })
 
     $UI.btnSaveConfig.Add_Click({
+        # Config.json could not be read at startup: nothing can be saved
+        # (Save-Config would overwrite it and lose the tenants), so no form
+        # check, no folder created, no connection test; only the startup
+        # error again (the parse error in the log file only).
+        if ($AppState.configLoadError) {
+            Clear-UILog 'Config' "$($AppState.configLoadError)" 'ERROR'
+            if ($AppState.configLoadErrorDetail) { Write-Log 'Config' "Details: $($AppState.configLoadErrorDetail)" 'ERROR' -FileOnly }
+            return
+        }
         # Existing tenant whose secret was typed: counts as updated (see Get-TenantSnapshot).
         $secretChangedKey = if ($AppState.cfgSecretEdited -and $AppState.editingTenantKey) { $AppState.editingTenantKey } else { $null }
         $formEditedNow    = [bool]$AppState.cfgFormEdited
+        $script:cfgCreatedFolder = $null
         if (-not (Save-TenantForm)) { return }
 
         # A save starts with an empty log view, like the four main actions:
         # only this save's lines follow. The log file keeps the rest.
         Clear-UILog
+
+        # The tenant in the form. Only what this Save adds or changes gets the
+        # start line and (online) the connection test: a new tenant, or an
+        # existing one that was edited in the form (also when the same value
+        # is pasted again, e.g. to retry a failing connection). A tenant that
+        # is just selected (e.g. while saving removals) gets neither.
+        #   Creating online tenant 'x'...  /  Updating offline baseline 'x'...
+        #   Created folder: <path>          (offline, a folder Save created)
+        #   Testing connection...           (online, then the Graph lines)
+        #   Saved online tenant 'x' with ... / Saved offline baseline 'x'
+        $testKey  = $AppState.editingTenantKey
+        $testNode = if ($testKey) { $AppState.tenantStore[$testKey] } else { $null }
+        $isNewTenant = $false
+        $isChanged   = $false
+        if ($testNode) {
+            $isNewTenant = -not ($AppState.cfgTenantSnapshot -and $AppState.cfgTenantSnapshot.ContainsKey($testKey))
+            if (-not $isNewTenant) {
+                $nowSnap   = Get-TenantSnapshot
+                $isChanged = ($nowSnap[$testKey].Sig -ne $AppState.cfgTenantSnapshot[$testKey].Sig) -or ($testKey -eq $secretChangedKey) -or $formEditedNow
+            }
+        }
+        $isOnline = ($testNode -and $testNode.authMethod -and $testNode.authMethod -ne 'None')
+        if ($isNewTenant -or $isChanged) {
+            $tenantLabel = if ($testNode.displayName) { $testNode.displayName } else { $testKey }
+            $kind        = if ($isOnline) { 'online tenant' } else { 'offline baseline' }
+            Write-Log 'Config' $(if ($isNewTenant) { "Creating $kind '$tenantLabel'..." } else { "Updating $kind '$tenantLabel'..." })
+        }
+        # The folder of an offline baseline that Save-TenantForm created.
+        if ($script:cfgCreatedFolder) { Write-Log 'Config' "Created folder: $($script:cfgCreatedFolder)" }
 
         # ── Connection test (sync) ──────────────────────────────────────────
         # Runs before Save-Config, on the tenant just committed to
@@ -702,28 +799,11 @@ function Open-ConfigWindow {
         # and blocking it for the 2-5 s token request is intended.
         # A failed test still saves (offline, or fix it later); the log and
         # the label say the credentials did not verify.
-        $testKey  = $AppState.editingTenantKey
-        $testNode = if ($testKey) { $AppState.tenantStore[$testKey] } else { $null }
-        $shouldTest = ($testNode -and $testNode.authMethod -ne 'None' -and $testNode.authMethod)
-        # Only test what this Save adds or changes: a new tenant, or an
-        # existing one that was edited in the form (also when the same value
-        # is pasted again, e.g. to retry a failing connection). A tenant that
-        # is just selected (e.g. while saving removals) is not tested again.
-        if ($shouldTest) {
-            $isNewTenant = -not ($AppState.cfgTenantSnapshot -and $AppState.cfgTenantSnapshot.ContainsKey($testKey))
-            $isChanged   = $false
-            if (-not $isNewTenant) {
-                $nowSnap   = Get-TenantSnapshot
-                $isChanged = ($nowSnap[$testKey].Sig -ne $AppState.cfgTenantSnapshot[$testKey].Sig) -or ($testKey -eq $secretChangedKey) -or $formEditedNow
-            }
-            $shouldTest = $isNewTenant -or $isChanged
-        }
+        $shouldTest = $isOnline -and ($isNewTenant -or $isChanged)
         $testPassed = $true   # Default true so offline-only tenants don't trigger a failure UI
 
         if ($shouldTest) {
-            $tenantLabel = if ($testNode.displayName) { $testNode.displayName } else { $testKey }
-            Write-Log 'Config' $(if ($isNewTenant) { "Testing connection for new tenant '$tenantLabel'..." }
-                                 else              { "Testing connection for tenant '$tenantLabel'..." }) 'INFO'
+            Write-Log 'Config' 'Testing connection...' 'INFO'
             if ($UI.lblConnectionStatus) {
                 $UI.lblConnectionStatus.Foreground = [System.Windows.Media.Brushes]::Gray
                 $UI.lblConnectionStatus.Text       = "Testing connection..."
@@ -736,11 +816,22 @@ function Open-ConfigWindow {
             }
             # No buttons disabled: the sync call blocks the UI thread, so
             # clicks only run after this handler returns.
+            # New-GraphConnection logs why a test fails ("Could not authenticate
+            # with Microsoft Graph ..."); only an unexpected throw is logged here.
             $conn = $null
-            try { $conn = New-GraphConnection -Config $testNode -Label 'Config' }
-            catch { Write-Log 'Config' "Details: $($_.Exception.Message)" 'WARN' -FileOnly }
+            try { $conn = New-GraphConnection -Config $testNode -Label 'Config' -FailLevel 'WARN' }
+            catch {
+                Write-Log 'Config' "Could not connect to '$tenantLabel'. See Basetune.log for details" 'WARN'
+                Write-Log 'Config' "Details: $($_.Exception.Message)" 'WARN' -FileOnly
+            }
 
             $testPassed = ($null -ne $conn)
+            # Kept for the next Load / Download of this tenant, as their own
+            # sign-ins are (Get-GraphConnection checks it is still valid and the
+            # tenant unchanged): no second sign-in right after Save. A failed
+            # test drops an older one of this tenant.
+            if ($testPassed) { $AppState.graphConnections[$testKey] = $conn }
+            else             { [void]$AppState.graphConnections.Remove($testKey) }
 
             if ($UI.lblConnectionStatus) {
                 if ($testPassed) {
@@ -751,11 +842,9 @@ function Open-ConfigWindow {
                     $UI.lblConnectionStatus.Text       = "Connection failed. Saving anyway..."
                 }
             }
-            if ($testPassed) {
-                Write-Log 'Config' "Connection verified for '$tenantLabel'"
-            } else {
-                Write-Log 'Config' "Could not connect to '$tenantLabel'. Saving anyway. See the log file for details" 'WARN'
-            }
+            # The result is in the Graph lines above ("Signed in successfully
+            # ..." / "Could not authenticate ..."); a failed test still saves
+            # (the status label says "Connection failed. Saving anyway...").
         } else {
             # Nothing tested: clear the status of a previous save.
             if ($UI.lblConnectionStatus) { $UI.lblConnectionStatus.Text = '' }
@@ -765,21 +854,26 @@ function Open-ConfigWindow {
             Save-Config
 
             # What this Save changed, compared with the previous save.
+            # New and changed tenants get the same "Saved ..." line; an online
+            # tenant also names its authentication method.
             $before = $AppState.cfgTenantSnapshot
             $after  = Get-TenantSnapshot
+            $kindOf = { param($snap) if (-not $snap.Auth -or $snap.Auth -eq 'None') { 'offline baseline' } else { 'online tenant' } }
             foreach ($k in $after.Keys) {
-                if (-not $before.ContainsKey($k)) {
-                    $authShown = if ($after[$k].Auth -eq 'None') { 'None (JSON)' } else { $after[$k].Auth }
-                    Write-Log 'Config' "Created tenant '$($after[$k].Name)' with authentication method '$authShown'"
+                $isNew     = -not $before.ContainsKey($k)
+                $isUpdated = -not $isNew -and ($before[$k].Sig -ne $after[$k].Sig -or $k -eq $secretChangedKey)
+                if (-not ($isNew -or $isUpdated)) { continue }
+                $kind = & $kindOf $after[$k]
+                if ($kind -eq 'online tenant') {
+                    # Same text as the dropdown ("Client Secret"), not the Config.json value.
+                    $authShown = if ($after[$k].Auth -eq 'ClientSecret') { 'Client Secret' } else { $after[$k].Auth }
+                    Write-Log 'Config' "Saved online tenant '$($after[$k].Name)' with authentication method '$authShown'"
+                } else {
+                    Write-Log 'Config' "Saved offline baseline '$($after[$k].Name)'"
                 }
             }
             foreach ($k in $before.Keys) {
-                if (-not $after.ContainsKey($k)) { Write-Log 'Config' "Removed tenant '$($before[$k].Name)'" }
-            }
-            foreach ($k in $after.Keys) {
-                if ($before.ContainsKey($k) -and ($before[$k].Sig -ne $after[$k].Sig -or $k -eq $secretChangedKey)) {
-                    Write-Log 'Config' "Updated tenant '$($after[$k].Name)'"
-                }
+                if (-not $after.ContainsKey($k)) { Write-Log 'Config' "Removed $(& $kindOf $before[$k]) '$($before[$k].Name)'" }
             }
             $AppState.cfgTenantSnapshot = $after
             $AppState.cfgSecretEdited   = $false
@@ -788,9 +882,13 @@ function Open-ConfigWindow {
             $savedKey   = $AppState.editingTenantKey
             $prevSrcTag = if ($UI.cmbSourceTenant.SelectedItem) { $UI.cmbSourceTenant.SelectedItem.Tag } else { '' }
             $prevTgtTag = if ($UI.cmbTargetTenant.SelectedItem) { $UI.cmbTargetTenant.SelectedItem.Tag } else { '' }
+            # Positions in the main lists before the reload: a removed tenant is
+            # replaced by the one at its position (Sync-MainTenantDropdowns).
+            $prevSrcIdx = $UI.cmbSourceTenant.SelectedIndex
+            $prevTgtIdx = $UI.cmbTargetTenant.SelectedIndex
             $AppState.suppressEvents = $true
             Import-Config
-            Sync-MainTenantDropdowns -PreferSrcTag $prevSrcTag -PreferTgtTag $prevTgtTag
+            Sync-MainTenantDropdowns -PreferSrcTag $prevSrcTag -PreferTgtTag $prevTgtTag -PrevSrcIndex $prevSrcIdx -PrevTgtIndex $prevTgtIdx
             $AppState.suppressEvents = $false
             $AppState.lastSourceTenantKey = if ($UI.cmbSourceTenant.SelectedItem) { $UI.cmbSourceTenant.SelectedItem.Tag } else { $null }
             $AppState.lastTargetTenantKey = if ($UI.cmbTargetTenant.SelectedItem) { $UI.cmbTargetTenant.SelectedItem.Tag } else { $null }
@@ -814,10 +912,12 @@ function Open-ConfigWindow {
             $AppState.suppressEvents = $false
             $UI.btnSaveConfig.IsEnabled = $true
             if ($AppState.configLoadError) {
-                # Invalid Config.json: log only, no popup.
-                Write-Log 'Config' "$($_.Exception.Message) Tenant configuration not saved" 'ERROR'
+                # Invalid Config.json: log only, no popup. Same two lines as at
+                # startup (the parse error in the log file only).
+                Write-Log 'Config' "$($_.Exception.Message)" 'ERROR'
+                if ($AppState.configLoadErrorDetail) { Write-Log 'Config' "Details: $($AppState.configLoadErrorDetail)" 'ERROR' -FileOnly }
             } else {
-                Write-Log 'Config' 'Could not save Config.json. See the log file for details' 'ERROR'
+                Write-Log 'Config' 'Could not save Config.json. See Basetune.log for details' 'ERROR'
                 Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
                 [System.Windows.MessageBox]::Show("Saving the configuration failed:`n$($_.Exception.Message)", "Basetune", 'OK', 'Error') | Out-Null
             }
@@ -827,18 +927,11 @@ function Open-ConfigWindow {
     $btnClose = Find-ConfigControl 'btnCloseConfig'
     if ($btnClose) { $btnClose.Add_Click({ $cfgWindow.Close() }) }
 
+    # Reported only when Config.json was readable while the window was open
+    # (opening already reported a file that was invalid before).
     $cfgWindow.Add_Closed({
-        $prevSrcTag = if ($UI.cmbSourceTenant.SelectedItem) { $UI.cmbSourceTenant.SelectedItem.Tag } else { '' }
-        $prevTgtTag = if ($UI.cmbTargetTenant.SelectedItem) { $UI.cmbTargetTenant.SelectedItem.Tag } else { '' }
-        Import-Config -Quiet
-        $AppState.suppressEvents = $true
-        Sync-MainTenantDropdowns -PreferSrcTag $prevSrcTag -PreferTgtTag $prevTgtTag
-        $AppState.suppressEvents = $false
-        $AppState.lastSourceTenantKey = if ($UI.cmbSourceTenant.SelectedItem) { $UI.cmbSourceTenant.SelectedItem.Tag } else { $null }
-        $AppState.lastTargetTenantKey = if ($UI.cmbTargetTenant.SelectedItem) { $UI.cmbTargetTenant.SelectedItem.Tag } else { $null }
-        Reset-ChangedSides -PrevSrcTag $prevSrcTag -PrevTgtTag $prevTgtTag
-        Update-ExportButtons
-        Update-EmptyState 'Source'; Update-EmptyState 'Target'
+        $readableBefore = -not $AppState.configReadFailed
+        Update-MainTenantsFromConfig -ReportError:$readableBefore
     })
 
     $cfgWindow.Add_KeyDown({ param($s,$e); if ($e.Key -eq 'Escape') { $cfgWindow.Close() } })
@@ -855,7 +948,7 @@ function Open-ConfigWindow {
 
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
-# Opens Tenant Configuration from the main window. Called once from Basetune.ps1.
+# Opens Tenant Configuration from the main window. Called once from BasetuneUI.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-ConfigWindowEvents {
     $UI.btnOpenConfig.Add_Click({ Open-ConfigWindow })
@@ -877,6 +970,7 @@ Export-ModuleMember -Function @(
     'Update-ConfigSaveButton',
     'Clear-UnsavedChanges',
     'Reset-ChangedSides',
+    'Update-MainTenantsFromConfig',
     'Reset-TenantFormState',
     'Get-TenantSnapshot',
     'Test-TenantStoreChanged',

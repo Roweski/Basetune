@@ -45,17 +45,16 @@ function ConvertTo-SettingCategoryMap {
 # Which definition file to read. A release ships settings.default.json /
 # categories.default.json; a download writes settings.json / categories.json
 # next to them and never touches the .default files. Read order: downloaded,
-# then default. The older names (settingDefinitions.json /
-# settingCategories.json, and their .default files) are read as a fallback.
-# Exists = $false: none of them is there (Path = the downloaded name).
+# then default. Other file names (settingDefinitions.json /
+# settingCategories.json of older versions) are not read.
+# Exists = $false: neither is there (Path = the downloaded name).
 function Get-DefinitionFile {
     param(
         [Parameter(Mandatory)][string]$DefinitionsPath,
         [Parameter(Mandatory)][ValidateSet('Definitions','Categories')][string]$Kind
     )
-    $base   = if ($Kind -eq 'Definitions') { 'settings' }           else { 'categories' }
-    $legacy = if ($Kind -eq 'Definitions') { 'settingDefinitions' } else { 'settingCategories' }
-    foreach ($name in "$base.json", "$legacy.json", "$base.default.json", "$legacy.default.json") {
+    $base = if ($Kind -eq 'Definitions') { 'settings' } else { 'categories' }
+    foreach ($name in "$base.json", "$base.default.json") {
         $p = Join-Path $DefinitionsPath $name
         if (Test-Path -LiteralPath $p) {
             return [PSCustomObject]@{ Path = $p; Name = $name; IsDefault = ($name -like '*.default.json'); Exists = $true }
@@ -134,7 +133,7 @@ function ConvertTo-SlimSettingCategory {
 # Fetches the configurationSettings and configurationCategories catalogs from
 # Graph into the Definitions folder (the friendly-name lookups of the compare).
 #
-# Input  : Connection      — Graph connection (API tenant required)
+# Input  : Connection      — Graph connection (online tenant required)
 #          DefinitionsPath — target folder for settings.json / categories.json
 #          GraphBeta       — base URI for the Graph beta endpoint
 #          LogQueue        — unused, for symmetry with Read-PoliciesFromTenant:
@@ -167,7 +166,7 @@ function Invoke-DefinitionDownload {
     Write-Log "Download" "Downloading setting definitions..." "INFO"
     $definitions = @(Get-GraphPagedResults -Connection $Connection `
         -Uri "$GraphBeta/deviceManagement/configurationSettings" `
-        -MaxRetries 5 -TimeoutSec 60)
+        -MaxRetries 5 -TimeoutSec 60 -ItemName 'setting definitions')
     if ($definitions.Count -eq 0) {
         throw "Retrieved 0 settings. Existing files were left unchanged"
     }
@@ -179,7 +178,7 @@ function Invoke-DefinitionDownload {
     Write-Log "Download" "Downloading category definitions..." "INFO"
     $categories = @(Get-GraphPagedResults -Connection $Connection `
         -Uri "$GraphBeta/deviceManagement/configurationCategories" `
-        -TimeoutSec 60)
+        -TimeoutSec 60 -ItemName 'category definitions')
     if ($categories.Count -eq 0) {
         throw "Retrieved 0 categories. Existing files were left unchanged"
     }
@@ -206,7 +205,7 @@ function Invoke-DefinitionDownload {
                 Write-Log "Download" "Kept $($kept.Count) extra categories from $($catsExisting.Name)" "INFO"
             }
         } catch {
-            Write-Log "Download" "Could not read the existing $($catsExisting.Name) to keep extra categories. See the log file for details" "WARN"
+            Write-Log "Download" "Could not read the existing $($catsExisting.Name) to keep extra categories. See Basetune.log for details" "WARN"
             Write-Log "Download" "Details: $($_.Exception.Message)" "WARN" -FileOnly
         }
     }
@@ -252,9 +251,9 @@ function Invoke-DefinitionDownload {
 # ─────────────────────────────────────────────────────────────────────────────
 # Definitions for a compare, with the log lines both CLI and UI show:
 #   Retrieving setting and category definitions...
-#   [what is missing, if anything]
 #   Loaded 18402 setting definitions from cache | from settings.json
 #   Loaded 1037 category definitions from cache | from categories.json
+#   [what is missing, if anything]
 # The UI passes its in-memory cache; the CLI passes nothing and reads the
 # files (downloaded first, else the .default files, Get-DefinitionFile).
 # A file that cannot be read is reported and left out (raw ids in the output).
@@ -274,14 +273,6 @@ function Get-CompareDefinitions {
     Write-Log 'Definitions' 'Retrieving setting and category definitions...' 'INFO'
     $defsAvail = $hasCachedDefs -or $defsFile.Exists
     $catsAvail = $hasCachedCats -or $catsFile.Exists
-    # What is missing is reported first, right under the header.
-    if (-not $defsAvail -and -not $catsAvail) {
-        Write-Log 'Definitions' 'No setting and category definitions found. Display names will not be resolved' 'WARN'
-    } elseif (-not $defsAvail) {
-        Write-Log 'Definitions' 'No setting definitions found. Display names will not be resolved' 'WARN'
-    } elseif (-not $catsAvail) {
-        Write-Log 'Categories' 'No category definitions found. Categories will not be resolved' 'WARN'
-    }
 
     $defLookup = $null
     if ($hasCachedDefs) {
@@ -293,7 +284,7 @@ function Get-CompareDefinitions {
             Write-Log 'Definitions' "Loaded $($defLookup.Count) setting definitions from $($defsFile.Name)"
         } catch {
             $defLookup = $null
-            Write-Log 'Definitions' 'Could not read setting definitions. Display names will not be resolved' 'WARN'
+            Write-Log 'Definitions' 'Could not read setting definitions. Display names and categories will not be resolved' 'WARN'
             Write-Log 'Definitions' "Details: $($_.Exception.Message)" 'WARN' -FileOnly
         }
     }
@@ -311,6 +302,15 @@ function Get-CompareDefinitions {
             Write-Log 'Categories' 'Could not read category definitions. Categories will not be resolved' 'WARN'
             Write-Log 'Categories' "Details: $($_.Exception.Message)" 'WARN' -FileOnly
         }
+    }
+
+    # What is missing comes after what was loaded, as the last line.
+    if (-not $defsAvail -and -not $catsAvail) {
+        Write-Log 'Definitions' 'No setting and category definitions found. Display names and categories will not be resolved' 'WARN'
+    } elseif (-not $defsAvail) {
+        Write-Log 'Definitions' 'No setting definitions found. Display names and categories will not be resolved' 'WARN'
+    } elseif (-not $catsAvail) {
+        Write-Log 'Categories' 'No category definitions found. Categories will not be resolved' 'WARN'
     }
 
     return [PSCustomObject]@{ DefinitionLookup = $defLookup; CategoryById = $catMap }

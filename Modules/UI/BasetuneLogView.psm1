@@ -19,7 +19,7 @@ $script:AppState = (Get-BasetuneContext).State
 # it ("Loading source policies").
 $script:UILogMaxLines = 5000
 
-# Local paths in a line (C:\...\Report.html, a folder) become links: a click
+# Paths in a line (C:\...\Report.html, \\server\share\..., a folder) become links: a click
 # opens the file with its default app, or the folder in Explorer. A path ends
 # at the end of the line, before " (", " —", a quote or a sentence-ending
 # period. " (" only ends it when no backslash follows, so a folder like
@@ -30,7 +30,7 @@ $script:UILogMaxLines = 5000
 # name (still a link to the full path). The compare output has its own
 # "Report folder: ..." line (see Add-UILogLines). View only: the log file
 # keeps the full paths.
-$script:UILogPathRegex = [regex]'[A-Za-z]:\\.*?(?=\.?(?:\s\((?![^\\]*\\)|\s—|[''"]|$))'
+$script:UILogPathRegex = [regex]'(?:[A-Za-z]:\\|\\\\[^\\\s]+\\).*?(?=\.?(?:\s\((?![^\\]*\\)|\s—|[''"]|$))'
 $script:UILogLastDir   = $null
 
 # Plain string split on '\' (the paths are always Windows paths).
@@ -64,7 +64,7 @@ function script:New-UILogLink {
             }
             if ($denied) {
                 $what = if (Test-UILogIsFile $path) { 'file' } else { 'folder' }
-                Write-UILog 'Basetune' "Could not open the $what. See the log file for details" 'WARN'
+                Write-UILog 'Basetune' "Could not open the $what. See Basetune.log for details" 'WARN'
                 Write-Log 'Basetune' "Details: no access to '$path'" 'WARN' -FileOnly
             } else {
                 Write-UILog 'Basetune' "Path not found: $path" 'WARN'
@@ -90,12 +90,13 @@ function script:New-UILogParagraph {
     return $p
 }
 
-# "See the log file" becomes a link that opens Basetune.log (other wording:
-# just "the log file"). "See compare.log for details" (the warnings at the
-# end of a compare) is a link as a whole to compare.log in the folder of the
-# running compare (written by Invoke-BaselineCompare, next to the report);
-# without "for details" just "See compare.log".
-$script:UILogFileRegex = [regex]'(?<log>See the log file|the log file)|(?<cmp>See compare\.log(?: for details)?)'
+# "See Basetune.log for details" is a link as a whole that opens Basetune.log
+# (without "for details" just "See Basetune.log"; older wording "the log
+# file" too). "See Compare.log for details" (the warnings at the end of a compare)
+# is a link as a whole to Compare.log in the folder of the running compare
+# (written by Invoke-BaselineCompare, next to the report); without "for
+# details" just "See Compare.log".
+$script:UILogFileRegex = [regex]'(?<log>See Basetune\.log(?: for details)?|the log file)|(?<cmp>See Compare\.log(?: for details)?)'
 
 function script:Add-UILogText {
     param([System.Windows.Documents.Paragraph]$Paragraph, [string]$Text, [switch]$NoLinks)
@@ -104,7 +105,7 @@ function script:Add-UILogText {
     if (-not $NoLinks) {
         foreach ($m in $script:UILogFileRegex.Matches($Text)) {
             $target = if ($m.Groups['cmp'].Success) {
-                          if ($AppState.compareRunDir) { Join-Path $AppState.compareRunDir 'compare.log' }
+                          if ($AppState.compareRunDir) { Join-Path $AppState.compareRunDir 'Compare.log' }
                       } else { $AppState.logFile }
             if (-not $target) { continue }   # left as plain text below
             if ($m.Index -gt $pos) {
@@ -145,15 +146,17 @@ function script:Add-UILogInlines {
 # ── Calm "busy" dots on some progress lines ────────────────────────────────
 # The compare, export and download progress lines ("Comparing settings...",
 # "Exporting HTML report...", "Writing definition files to disk...", see the
-# regex) keep their dots moving (. .. ...) every 0.6 s until the next line is
-# written; then they end as plain "...". One line animates at a time. Best
-# effort: without the run nothing animates.
-$script:UILogAnimRegex = [regex]'^(?<base>Comparing settings|Resolving display names( and categories)?|Exporting CSV reports|Exporting HTML report|Downloading (setting|category|setting and category) definitions( using tenant: .+)?|Writing definition files to disk|Updating category definitions)\.\.\.$'
+# regex) keep their dots moving (none . .. ..., one step per 333 ms: one
+# second from no dot to three) until the next line is written; then they end
+# as plain "...", as in the log file. The line starts without dots (not at
+# "..."), so the first step is not a jump back. One line animates at a time.
+# Best effort: without the run nothing animates.
+$script:UILogAnimRegex = [regex]'^(?<base>Reading \d+ JSON files?|Retrieving settings from (source|target) policies|Comparing settings|Resolving display names( and categories)?|Exporting CSV reports|Exporting HTML report|Downloading (setting|category|setting and category) definitions( using tenant ''.+'')?|Writing definition files to disk|Updating category definitions)\.\.\.$'
 $script:UILogAnimRun   = $null
 $script:UILogAnimBase  = ''
 $script:UILogAnimTick  = 0
 $script:UILogAnimTimer = $null
-$script:UILogLastLineResolving = $false   # last line in the view was the "Resolving display names ..." line
+$script:UILogLastLineExported = $false   # last line in the view was "All reports created successfully"
 
 function script:Stop-UILogAnim {
     if ($script:UILogAnimRun) {
@@ -169,14 +172,15 @@ function script:Start-UILogAnim {
     $script:UILogAnimRun  = $Run
     $script:UILogAnimBase = $Base
     $script:UILogAnimTick = 0
+    try { $Run.Text = $Base } catch {}
     if (-not $script:UILogAnimTimer) {
         $t = [System.Windows.Threading.DispatcherTimer]::new()
-        $t.Interval = [TimeSpan]::FromMilliseconds(600)
+        $t.Interval = [TimeSpan]::FromMilliseconds(333)
         $t.Add_Tick({
             $r = $script:UILogAnimRun
             if (-not $r) { $script:UILogAnimTimer.Stop(); return }
             $script:UILogAnimTick++
-            try { $r.Text = $script:UILogAnimBase + ('.' * (($script:UILogAnimTick % 3) + 1)) } catch {}
+            try { $r.Text = $script:UILogAnimBase + ('.' * ($script:UILogAnimTick % 4)) } catch {}
         })
         $script:UILogAnimTimer = $t
     }
@@ -200,32 +204,40 @@ function Add-UILogLines {
             # Log file only: the JSON folder of a load ("Using path: ...").
             if ($level -ne 'ERROR' -and $shown -match '^Using path: ') { continue }
 
-            # Selection changed during the compare: the note goes right after the
-            # "Resolving display names ..." line (if no line follows it, it is
-            # written when the compare ends).
-            if ($AppState.compareSelectionNotePending -and $script:UILogLastLineResolving) {
+            # Selection changed during the compare: the note goes right after
+            # "All reports created successfully", before the compare warnings
+            # (if no line follows it, it is written when the compare ends).
+            if ($AppState.compareSelectionNotePending -and $script:UILogLastLineExported) {
                 $AppState.compareSelectionNotePending = $false
-                Write-UILog 'Compare' 'Policy selection changed. Disabling report and details buttons'
+                Write-UICompareSelectionNote
             }
-            $script:UILogLastLineResolving = ($shown -match '^(Resolving|Skipping) display names')
+            $script:UILogLastLineExported = ($shown -eq 'All reports created successfully')
 
             # A new line ends the dots of the previous busy line. Only called when
             # a line is busy: a call per line adds up over 1000+ "Loaded policy" lines.
             if ($script:UILogAnimRun) { Stop-UILogAnim }
 
+            # Per-item progress line (New-LogEntry -Replace): shown only while
+            # it is the last line. The next line, of any kind, takes its place:
+            # the next policy, or "Loaded 46 policies", a retry warning, ...
+            # The paragraph carries the key in its Tag (set below).
+            $replaceKey = if ($entry.Replace) { "$($entry.Label)|$($entry.Replace)" } else { $null }
+            if ($doc.Blocks.LastBlock -and $doc.Blocks.LastBlock.Tag) {
+                [void]$doc.Blocks.Remove($doc.Blocks.LastBlock)
+            }
+
             # Compare output in the order Invoke-BaselineCompare logs it (-> as shown):
-            #   Comparison complete: 958 rows processed            (as it is)
             #   Report folder: C:\reports\Src_Tgt\20261010_113304   (link, relative)
             #   Exporting CSV reports...
-            #   Created <path>\Diff.csv (958 rows)                  -> Created Diff.csv (958 rows)
-            #   Created <path>\Summary.csv                          -> Created Summary.csv
+            #   Saved <path>\Diff.csv (958 rows)                    -> Saved Diff.csv (958 rows)
+            #   Saved <path>\Summary.csv                            -> Saved Summary.csv
             #   Exporting HTML report...
-            #   Created <path>\Report.html (522 settings)           -> Created Report.html (522 settings)
-            # The "Report folder" line sets the folder, so the "Created" lines show
+            #   Saved <path>\Report.html (522 settings)             -> Saved Report.html (522 settings)
+            # The "Report folder" line sets the folder, so the "Saved" lines show
             # only the file name as a link (general path handling below).
             # No counts per status here: the report counts per setting, which
             # differs from the rows in Diff.csv.
-            if ($level -ne 'ERROR' -and $shown -match '^Report folder: (?<p>[A-Za-z]:\\.+)$') {
+            if ($level -ne 'ERROR' -and $shown -match '^Report folder: (?<p>(?:[A-Za-z]:\\|\\\\).+)$') {
                 $dir = $Matches['p'].TrimEnd('\')
                 $script:UILogLastDir = $dir
                 $up = New-UILogParagraph
@@ -242,35 +254,32 @@ function Add-UILogLines {
                 continue
             }
 
-            # Lines about Config.json (e.g. "Report path in Config.json normalized:
-            # 'C:\Reports\' -> 'C:\Reports'.") describe its contents: plain text,
-            # no path links, no folder bookkeeping.
-            if ($shown -match 'Config\.json') {
-                # View only: the default report folder in the missing / invalid
-                # report path messages is shown as .\Reports.
-                if ($shown -match '^(Config\.json is missing report path setting|Invalid report path .+ in Config\.json)\. Set to default \(' -and $AppState.ScriptRoot) {
-                    $rootRx = [regex]::Escape('Set to default (' + $AppState.ScriptRoot.TrimEnd('\') + '\')
-                    $shown  = [regex]::Replace($shown, $rootRx, 'Set to default (.\', 'IgnoreCase')
-                }
+            # Lines about Config.json (e.g. "Config.json is not a valid JSON file
+            # ...", "Tenant ID for 'x' in Config.json is longer than 64
+            # characters ...") describe its contents: plain text, no path links, no
+            # folder bookkeeping. Whole word only: a file name such as
+            # "wksfirewallconfig.json" is not about Config.json.
+            if ($shown -match '\bConfig\.json\b') {
                 $p = New-UILogParagraph
-                # No path links here, but "the log file" stays a link.
+                # No path links here, but "See Basetune.log for details" stays a link.
                 Add-UILogText -Paragraph $p -Text $shown
                 if ($level -eq 'ERROR') {
                     $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'ErrorBrush')
                 } elseif ($level -eq 'WARN') {
                     $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'WarnBrush')
                 }
+                if ($replaceKey) { $p.Tag = $replaceKey }
                 $doc.Blocks.Add($p)
                 continue
             }
 
             # Most lines ("Loaded policy: ...", 1000+ in a large load) hold no path
             # and no link text. The regex calls below (.NET calls, slow per line)
-            # only run when the line can match: a path needs "X:\", a link "the log
-            # file" / "See compare.log" (checked case-insensitively here, so nothing
+            # only run when the line can match: a path needs "X:\" or "\\", a link "See
+            # Basetune.log" / "See Compare.log" (checked case-insensitively here, so nothing
             # the case-sensitive link regex matches is skipped).
-            $hasPath = $shown -match '[A-Za-z]:\\'
-            $plain   = $shown -and -not $hasPath -and $shown -notmatch 'the log file|See compare\.log'
+            $hasPath = $shown -match '[A-Za-z]:\\|\\\\'
+            $plain   = $shown -and -not $hasPath -and $shown -notmatch 'See Basetune\.log|the log file|See Compare\.log'
 
             # Folder bookkeeping for the short file names (see above).
             $first = if ($hasPath) { $script:UILogPathRegex.Match($shown) } else { $null }
@@ -312,6 +321,7 @@ function Add-UILogLines {
             } elseif ($level -eq 'WARN') {
                 $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'WarnBrush')
             }
+            if ($replaceKey) { $p.Tag = $replaceKey }
             $doc.Blocks.Add($p)
             # Busy line: animate its dots. The regex only runs on lines ending in "...".
             $am = if ($shown -like '*...') { $script:UILogAnimRegex.Match($shown) } else { $null }
@@ -331,6 +341,14 @@ function Clear-UILogView {
     Stop-UILogAnim
     if ($UI.txtLog) { $UI.txtLog.Document.Blocks.Clear() }
     $script:UILogLastDir = $null
+    # An action cleared the startup lines: the pending last startup line
+    # ("Ready to load policies") must not follow its lines.
+    $AppState.startupLastLine = $null
+    # Same for a definition preload still running: its remaining lines
+    # ("Cached ...", a missing-definitions warning) go to the log file only
+    # (the runspace writes the file itself), not between the action's lines.
+    if ($AppState.DefinitionPreload) { $AppState.DefinitionPreload.ViewCleared = $true }
+    $AppState.DefinitionPreloadAnim = $null
 }
 
 # A line in the log view and the log file (the file is a complete record of
@@ -341,6 +359,29 @@ function Write-UILog {
     $entry = New-LogEntry $Label $Message $Level
     Add-UILogLines $entry
     if ($AppState.logFile) { Add-LogFileLine -Path $AppState.logFile -Entry $entry }
+}
+
+# "Policy selection changed ..." (selection changed during a compare). In the
+# view always right after "All reports created successfully", before the
+# compare warnings, also when it is written at the end of the compare (the
+# selection changed after the warnings were shown). The log file has it in
+# time order.
+function Write-UICompareSelectionNote {
+    Write-UILog 'Compare' 'Policy selection changed. Disabling report and details buttons'
+    try {
+        $doc  = $UI.txtLog.Document
+        $note = $doc.Blocks.LastBlock
+        $b    = if ($note) { $note.PreviousBlock } else { $null }
+        while ($b) {
+            $text = [System.Windows.Documents.TextRange]::new($b.ContentStart, $b.ContentEnd).Text
+            if ($text -eq 'All reports created successfully') { break }
+            $b = $b.PreviousBlock
+        }
+        if ($b -and -not [object]::ReferenceEquals($b.NextBlock, $note)) {
+            [void]$doc.Blocks.Remove($note)
+            $doc.Blocks.InsertAfter($b, $note)
+        }
+    } catch {}
 }
 
 # Clears the log view; with a message, that becomes its first line.
@@ -354,5 +395,6 @@ Export-ModuleMember -Function @(
     'Add-UILogLines',
     'Clear-UILogView',
     'Write-UILog',
+    'Write-UICompareSelectionNote',
     'Clear-UILog'
 )

@@ -16,37 +16,36 @@ function Show-BasetuneCliHelp {
     Write-Host "Basetune $_version" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "USAGE" -ForegroundColor Yellow
-    Write-Host "  .\BasetuneCLI.ps1 -SourceId <id> -TargetId <id> [parameters]"
+    Write-Host "  .\BasetuneCLI.ps1 -Source <id> -Target <id> [parameters]"
     Write-Host ""
     Write-Host "COMPARE" -ForegroundColor Yellow
-    Write-Host "  -SourceId     <id>     Tenant id from Config.json to use as source (required)"
-    Write-Host "  -TargetId     <id>     Tenant id from Config.json to use as target (required)"
-    Write-Host "  -SourceFilter <text>   Only include source policies matching this filter"
-    Write-Host "  -TargetFilter <text>   Only include target policies matching this filter"
+    Write-Host "  -Source       <id>     Source tenant ID from Config.json (required)"
+    Write-Host "  -Target       <id>     Target tenant ID from Config.json (required)"
+    Write-Host "  -SourceFilter <text>   Filter source policies by name before loading"
+    Write-Host "  -TargetFilter <text>   Filter target policies by name before loading"
     Write-Host "  -ReportPath   <path>   Override report output folder for this run"
-    Write-Host "  -MaxThreads   <n>      Parallel threads for settings expand (default: from Options.json or 8)"
-    Write-Host "  -Platforms    <list>   Comma separated: windows,macos,ios,android,linux (default: windows)"
+    Write-Host "  -MaxThreads   <n>      Parallel threads for loading policy settings, 1-32 (default: from Options.json)"
+    Write-Host "  -Platforms    <list>   Comma-separated: windows,macos,ios,android,linux (default: windows)"
     Write-Host ""
     Write-Host "EXPORT" -ForegroundColor Yellow
-    Write-Host "  -ExportId     <id>     Export policies for tenant id to JSON files"
+    Write-Host "  -Export       <id>     Export policies from this tenant ID to JSON files"
     Write-Host "  -ExportPath   <path>   Output folder (required)"
-    Write-Host "  -ExportFilter <text>   Only include policies matching this filter"
-    Write-Host "  -Platforms    <list>   Comma separated: windows,macos,ios,android,linux (default: windows)"
+    Write-Host "  -ExportFilter <text>   Filter policies by name before exporting"
+    Write-Host "  -Platforms    <list>   Comma-separated: windows,macos,ios,android,linux (default: windows)"
     Write-Host ""
     Write-Host "DOWNLOAD" -ForegroundColor Yellow
-    Write-Host "  -Download              Download setting definitions and categories"
-    Write-Host "  -Id           <id>     Tenant to use (required: must be an API tenant)"
+    Write-Host "  -Download     <id>     Download setting definitions and categories using this online tenant ID"
     Write-Host ""
     Write-Host "INFO" -ForegroundColor Yellow
-    Write-Host "  -TenantList            List all configured tenants with id and auth method"
+    Write-Host "  -TenantList            List all configured tenants with IDs and authentication methods"
     Write-Host "  -? / -Help             Show this help"
     Write-Host ""
     Write-Host "EXAMPLES" -ForegroundColor Yellow
-    Write-Host "  .\BasetuneCLI.ps1 -SourceId <id> -TargetId <id>"
-    Write-Host "  .\BasetuneCLI.ps1 -SourceId <id> -SourceFilter Win-L1 -TargetId <id> -TargetFilter Win-L1"
-    Write-Host "  .\BasetuneCLI.ps1 -ExportId <id> -ExportPath C:\MyExport"
-    Write-Host "  .\BasetuneCLI.ps1 -ExportId <id> -ExportPath C:\MyExport -ExportFilter Win-L2"
-    Write-Host "  .\BasetuneCLI.ps1 -Download -Id <id>"
+    Write-Host "  .\BasetuneCLI.ps1 -Source <id> -Target <id>"
+    Write-Host "  .\BasetuneCLI.ps1 -Source <id> -SourceFilter Win-L1 -Target <id> -TargetFilter Win-L1"
+    Write-Host "  .\BasetuneCLI.ps1 -Export <id> -ExportPath C:\MyExport"
+    Write-Host "  .\BasetuneCLI.ps1 -Export <id> -ExportPath C:\MyExport -ExportFilter Win-L2"
+    Write-Host "  .\BasetuneCLI.ps1 -Download <id>"
     Write-Host "  .\BasetuneCLI.ps1 -TenantList"
     Write-Host ""
 }
@@ -61,10 +60,10 @@ $cli = {
     param (
         # ── COMPARE ───────────────────────────────────────────────────────────────
         [Parameter(ParameterSetName='Compare', Mandatory)]
-        [string]$SourceId,
+        [string]$Source,
 
         [Parameter(ParameterSetName='Compare', Mandatory)]
-        [string]$TargetId,
+        [string]$Target,
 
         [Parameter(ParameterSetName='Compare')]
         [string]$SourceFilter = "",
@@ -86,7 +85,7 @@ $cli = {
 
         # ── EXPORT ────────────────────────────────────────────────────────────────
         [Parameter(ParameterSetName='Export', Mandatory)]
-        [string]$ExportId,
+        [string]$Export,
 
         [Parameter(ParameterSetName='Export')]
         [string]$ExportPath = "",
@@ -95,11 +94,9 @@ $cli = {
         [string]$ExportFilter = "",
 
         # ── DOWNLOAD ──────────────────────────────────────────────────────────────
+        # The id of the online tenant to download with (no default tenant).
         [Parameter(ParameterSetName='Download', Mandatory)]
-        [switch]$Download,
-
-        [Parameter(ParameterSetName='Download')]
-        [string]$Id = "",
+        [string]$Download,
 
         # ── INFO ──────────────────────────────────────────────────────────────────
         [Parameter(ParameterSetName='TenantList', Mandatory)]
@@ -208,7 +205,7 @@ $cli = {
 
     # Resolve source/target nodes from the single rawCfg load above
     $cfg = $null
-    try { $cfg = Resolve-TenantConfig -Cfg $rawCfg -SourceId $SourceId -TargetId $TargetId } catch {}
+    try { $cfg = Resolve-TenantConfig -Cfg $rawCfg -SourceId $Source -TargetId $Target } catch {}
     if (-not $cfg) {
         $cfg = [PSCustomObject]@{ source = $null; target = $null; tenant = $null }
     }
@@ -224,18 +221,17 @@ $cli = {
         # credential and path checks below handle the rest per side).
         # Resolve-TenantConfig returns $null both for an unknown id and for an
         # entry marked invalid by Get-BasetuneConfig (an empty tenantId, clientId,
-        # clientSecret or certThumbprint). Tell the two apart.
+        # clientSecret or certThumbprint). Tell the two apart. One line per id:
+        # the same unknown id as source and target is reported once.
         $rawTenantExists = {
             param($id)
             [bool]($id -and $rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant -and $rawCfg.tenant.PSObject.Properties[$id])
         }
-        if (-not $cfg.source) {
-            if (& $rawTenantExists $SourceId) { $configErrors.Add("Source tenant '$SourceId' is incomplete in Config.json (tenantId, clientId, clientSecret or certThumbprint is empty)") }
-            else                              { $configErrors.Add("Source tenant '$SourceId' not found in Config.json") }
-        }
-        if (-not $cfg.target) {
-            if (& $rawTenantExists $TargetId) { $configErrors.Add("Target tenant '$TargetId' is incomplete in Config.json (tenantId, clientId, clientSecret or certThumbprint is empty)") }
-            else                              { $configErrors.Add("Target tenant '$TargetId' not found in Config.json") }
+        foreach ($tenantRef in @(@{ Id = $Source; Node = $cfg.source }, @{ Id = $Target; Node = $cfg.target })) {
+            if ($tenantRef.Node) { continue }
+            $msg = if (& $rawTenantExists $tenantRef.Id) { "Tenant with id '$($tenantRef.Id)' is incomplete in Config.json (tenantId, clientId, clientSecret or certThumbprint is empty)" }
+                   else                             { "Tenant with id '$($tenantRef.Id)' not found in Config.json" }
+            if (-not $configErrors.Contains($msg)) { $configErrors.Add($msg) }
         }
 
         if ($configErrors.Count -gt 0) {
@@ -250,20 +246,20 @@ $cli = {
 
         if ($srcAuth -ne 'None') {
             if (-not $cfg.source.tenantId -or -not $cfg.source.clientId) {
-                $configErrors.Add("Source '$SourceId': missing tenantId or clientId in Config.json")
+                $configErrors.Add("Source '$Source': missing tenantId or clientId in Config.json")
             } elseif ($srcAuth -eq 'ClientSecret' -and -not $cfg.source.clientSecret) {
-                $configErrors.Add("Source '$SourceId': authMethod is ClientSecret but clientSecret is missing")
+                $configErrors.Add("Source '$Source': authMethod is ClientSecret but clientSecret is missing")
             } elseif ($srcAuth -eq 'Certificate' -and -not $cfg.source.certThumbprint) {
-                $configErrors.Add("Source '$SourceId': authMethod is Certificate but certThumbprint is missing")
+                $configErrors.Add("Source '$Source': authMethod is Certificate but certThumbprint is missing")
             }
         }
         if ($tgtAuth -ne 'None') {
             if (-not $cfg.target.tenantId -or -not $cfg.target.clientId) {
-                $configErrors.Add("Target '$TargetId': missing tenantId or clientId in Config.json")
+                $configErrors.Add("Target '$Target': missing tenantId or clientId in Config.json")
             } elseif ($tgtAuth -eq 'ClientSecret' -and -not $cfg.target.clientSecret) {
-                $configErrors.Add("Target '$TargetId': authMethod is ClientSecret but clientSecret is missing")
+                $configErrors.Add("Target '$Target': authMethod is ClientSecret but clientSecret is missing")
             } elseif ($tgtAuth -eq 'Certificate' -and -not $cfg.target.certThumbprint) {
-                $configErrors.Add("Target '$TargetId': authMethod is Certificate but certThumbprint is missing")
+                $configErrors.Add("Target '$Target': authMethod is Certificate but certThumbprint is missing")
             }
         }
 
@@ -274,18 +270,18 @@ $cli = {
     }
 
     $sourceLabel = if ($cfg.source -and $cfg.source.PSObject.Properties['displayName'] -and $cfg.source.displayName) { $cfg.source.displayName } `
-                   elseif ($SourceId -and $rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant.PSObject.Properties[$SourceId]) {
-                       $n = $rawCfg.tenant.PSObject.Properties[$SourceId].Value
-                       if ($n.PSObject.Properties['displayName'] -and $n.displayName) { $n.displayName } else { $SourceId }
+                   elseif ($Source -and $rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant.PSObject.Properties[$Source]) {
+                       $n = $rawCfg.tenant.PSObject.Properties[$Source].Value
+                       if ($n.PSObject.Properties['displayName'] -and $n.displayName) { $n.displayName } else { $Source }
                    } `
-                   elseif ($SourceId) { $SourceId } else { "Basetune" }
+                   elseif ($Source) { $Source } else { "Basetune" }
 
     $targetLabel = if ($cfg.target -and $cfg.target.PSObject.Properties['displayName'] -and $cfg.target.displayName) { $cfg.target.displayName } `
-                   elseif ($TargetId -and $rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant.PSObject.Properties[$TargetId]) {
-                       $n = $rawCfg.tenant.PSObject.Properties[$TargetId].Value
-                       if ($n.PSObject.Properties['displayName'] -and $n.displayName) { $n.displayName } else { $TargetId }
+                   elseif ($Target -and $rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant.PSObject.Properties[$Target]) {
+                       $n = $rawCfg.tenant.PSObject.Properties[$Target].Value
+                       if ($n.PSObject.Properties['displayName'] -and $n.displayName) { $n.displayName } else { $Target }
                    } `
-                   elseif ($TargetId) { $TargetId } else { "Basetune" }
+                   elseif ($Target) { $Target } else { "Basetune" }
 
     $sourceConnection = $null
     $targetConnection = $null
@@ -296,8 +292,8 @@ $cli = {
     $sourceOrigin = if ($cfg.source) { Get-TenantMode $cfg.source } else { 'Offline' }
     $targetOrigin = if ($cfg.target) { Get-TenantMode $cfg.target } else { 'Offline' }
 
-    $needSource = -not $Download -and $sourceOrigin -eq 'Online' -and $cfg.source -and $ExportId -eq ""
-    $needTarget = -not $Download -and $targetOrigin -eq 'Online' -and $cfg.target -and $ExportId -eq ""
+    $needSource = -not $Download -and $sourceOrigin -eq 'Online' -and $cfg.source -and $Export -eq ""
+    $needTarget = -not $Download -and $targetOrigin -eq 'Online' -and $cfg.target -and $Export -eq ""
 
     # Connections are established after offline checks — see LOAD POLICIES section
 
@@ -313,42 +309,25 @@ $cli = {
 
     if ($Download) {
 
-        # -Id is required for download — pick the specified tenant
+        # The tenant given with -Download; it must be an online tenant.
         $downloadConfig = $null
-        if ($Id) {
-            if ($rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant -and
-                $rawCfg.tenant.PSObject.Properties[$Id]) {
-                $downloadConfig = $rawCfg.tenant.PSObject.Properties[$Id].Value
-            }
-            if (-not $downloadConfig) {
-                Write-Log "Download" "Tenant '$Id' not found in Config.json. Use -TenantList to list all configured tenant IDs" "ERROR"
-                exit 1
-            }
-            if ((Get-TenantMode $downloadConfig) -ne 'Online') {
-                Write-Log "Download" "Tenant '$Id' is a JSON tenant. Download needs an API tenant (ClientSecret or Certificate)" "ERROR"
-                exit 1
-            }
-        } else {
-            # No -Id: fall back to first online tenant in config
-            if ($rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant) {
-                foreach ($prop in $rawCfg.tenant.PSObject.Properties) {
-                    $n = $prop.Value
-                    if ($n -and $n.PSObject.Properties['authMethod'] -and $n.authMethod -and $n.authMethod -ne 'None') {
-                        $downloadConfig = $n
-                        break
-                    }
-                }
-            }
-            if (-not $downloadConfig) {
-                Write-Log "Download" "No API tenant found. Use -Id <id> or add an API tenant to Config.json" "ERROR"
-                exit 1
-            }
+        if ($rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant -and
+            $rawCfg.tenant.PSObject.Properties[$Download]) {
+            $downloadConfig = $rawCfg.tenant.PSObject.Properties[$Download].Value
+        }
+        if (-not $downloadConfig) {
+            Write-Log "Download" "Tenant '$Download' not found in Config.json. Use -TenantList to list all configured tenant IDs" "ERROR"
+            exit 1
+        }
+        if ((Get-TenantMode $downloadConfig) -ne 'Online') {
+            Write-Log "Download" "Tenant '$Download' is an offline baseline. Download needs an online tenant (ClientSecret or Certificate)" "ERROR"
+            exit 1
         }
         $downloadLabel = if ($downloadConfig.PSObject.Properties['displayName'] -and $downloadConfig.displayName) { $downloadConfig.displayName } else { 'tenant' }
-        Write-Log "Download" "Downloading setting and category definitions using tenant: $downloadLabel..." "INFO"
+        Write-Log "Download" "Downloading setting and category definitions using tenant '$downloadLabel'..." "INFO"
         $downloadConnection = New-GraphConnection -Config $downloadConfig -Label "Download"
         if (-not $downloadConnection) {
-            Write-Log "Download" "Could not connect to tenant '$downloadLabel'. Check the credentials in Config.json. See the log file for details" "ERROR"
+            Write-Log "Download" "Could not connect to tenant '$downloadLabel'. Check the credentials in Config.json. See Basetune.log for details" "ERROR"
             exit 1
         }
 
@@ -358,7 +337,7 @@ $cli = {
                 -DefinitionsPath $definitionsPath `
                 -GraphBeta       $GraphBeta
         } catch {
-            Write-Log "Download" "Download failed. See the log file for details" "ERROR"
+            Write-Log "Download" "Download failed. See Basetune.log for details" "ERROR"
             Write-Log "Download" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
             exit 1
         }
@@ -382,7 +361,7 @@ $cli = {
                     Id   = $prop.Name
                     Name = if ($n.PSObject.Properties['displayName'] -and $n.displayName) { "$($n.displayName)" } else { $prop.Name }
                     Auth = if ($n.PSObject.Properties['authMethod'] -and $n.authMethod) { "$($n.authMethod)" } else { 'None' }
-                    Type = if ((Get-TenantMode $n) -eq 'Online') { 'API' } else { 'JSON' }
+                    Type = if ((Get-TenantMode $n) -eq 'Online') { 'Microsoft Graph' } else { 'JSON' }
                 }
             })
         }
@@ -404,7 +383,7 @@ $cli = {
         foreach ($r in $rows) { Write-Host (& $fmt @($r.Id, $r.Name, $r.Auth, $r.Type)) }
         Write-Host ""
         $noun = if ($rows.Count -eq 1) { 'tenant' } else { 'tenants' }
-        Write-Host "$($rows.Count) $noun. Use -SourceId / -TargetId with the Id."
+        Write-Host "$($rows.Count) $noun. Use the Id with -Source / -Target, -Export or -Download."
         exit
     }
 
@@ -412,7 +391,7 @@ $cli = {
     # EXPORT MODE
     # ==============================================
 
-    if ($ExportId -ne "") {
+    if ($Export -ne "") {
 
         # ── -ExportPath required first ────────────────────────────────────────────
         # Checked BEFORE any Graph token request: a clear "missing parameter"
@@ -424,7 +403,7 @@ $cli = {
 
         # Export may go to a network share (\\server\share): a one-off write,
         # unlike the report path, which must be local (policy folders may be on a share too).
-        $_ep = Resolve-FolderPath -Path $ExportPath -BasePath (Get-Location -PSProvider FileSystem).ProviderPath -AllowNetwork
+        $_ep = Resolve-FolderPath -Path $ExportPath -BasePath (Get-Location -PSProvider FileSystem).ProviderPath
         if ($_ep.Error) {
             Write-Log "Export" "Parameter -ExportPath is not valid: $($_ep.Error)" "ERROR"
             exit 1
@@ -438,34 +417,37 @@ $cli = {
         # ── Resolve tenant node ───────────────────────────────────────────────────
         $exportNode = $null
         if ($rawCfg.PSObject.Properties['tenant'] -and $rawCfg.tenant -and
-            $rawCfg.tenant.PSObject.Properties[$ExportId]) {
-            $exportNode = $rawCfg.tenant.PSObject.Properties[$ExportId].Value
+            $rawCfg.tenant.PSObject.Properties[$Export]) {
+            $exportNode = $rawCfg.tenant.PSObject.Properties[$Export].Value
         }
         if (-not $exportNode) {
-            Write-Log "Export" "Tenant '$ExportId' not found in Config.json. Use -TenantList to list all configured tenant IDs" "ERROR"
+            Write-Log "Export" "Tenant '$Export' not found in Config.json. Use -TenantList to list all configured tenant IDs" "ERROR"
             exit 1
         }
 
-        $exportLabel  = if ($exportNode.PSObject.Properties['displayName'] -and $exportNode.displayName) { $exportNode.displayName } else { $ExportId }
+        $exportLabel  = if ($exportNode.PSObject.Properties['displayName'] -and $exportNode.displayName) { $exportNode.displayName } else { $Export }
         $exportOrigin = Get-TenantMode $exportNode
 
-        # Offline tenants can't be exported — their data already lives on disk as
+        # Offline baselines can't be exported — their data already lives on disk as
         # JSON files. The user can copy those directly instead of re-exporting.
         if ($exportOrigin -ne 'Online') {
-            Write-Log "Export" "Tenant '$exportLabel' is a JSON tenant. Export is only available for API tenants. Copy the existing JSON files directly if you need them elsewhere" "ERROR"
+            Write-Log "Export" "Tenant '$exportLabel' is an offline baseline. Export is only available for online tenants. Copy the existing JSON files directly if you need them elsewhere" "ERROR"
             exit 1
         }
 
-        # Build connection
+        # Export folder first, then the start line (as in the UI), then the
+        # sign-in (as in a load: after the start line).
+        Write-Log "Export" "Export folder: $outPath" "INFO"
+        Write-Log "Export" "Exporting policies from '$exportLabel'..." "INFO"
+
         $exportConnection = New-GraphConnection -Config $exportNode -Label "Export"
         if (-not $exportConnection) {
-            Write-Log "Export" "Could not connect to tenant '$exportLabel'. Check the credentials in Config.json. See the log file for details" "ERROR"
+            Write-Log "Export" "Could not connect to tenant '$exportLabel'. Check the credentials in Config.json. See Basetune.log for details" "ERROR"
             exit 1
         }
 
         if (-not (Test-Path $outPath)) { New-Item -ItemType Directory -Path $outPath -Force | Out-Null }
 
-        Write-Log "Export" "Exporting $exportLabel policies..." "INFO"
         try {
             $exportResult = Export-PoliciesToJson `
                 -Connection $exportConnection `
@@ -475,12 +457,12 @@ $cli = {
                 -MaxThreads  $MaxThreads `
                 -Platforms   $loadPlatforms
         } catch {
-            Write-Log "Export" "Export failed. See the log file for details" "ERROR"
+            Write-Log "Export" "Export failed. See Basetune.log for details" "ERROR"
             Write-Log "Export" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
             exit 1
         }
 
-        # Same as the UI: success is in the module's "Export completed. ..." line; failures
+        # Same as the UI: success is in the module's "Export completed (...)" line; failures
         # are listed per policy, followed by "Export failed.".
         if ($exportResult -and $exportResult.Failed -gt 0) {
             Write-Log "Export" "Export failed" "ERROR"
@@ -494,18 +476,17 @@ $cli = {
     # ==============================================
 
     # Same start lines as the UI:
-    #   Loading source policies from Contoso (API)...
+    #   Loading policies from source 'Contoso' (id: 1)...
     #   Policy name filter: 'x'   /   Policy name filter: None
     #   Platform filter: Windows, macOS
     function Write-LoadStartLog {
-        param([string]$Side, [string]$TenantLabel, [string]$Origin, [string]$Filter)
-        $originDesc = if ($Origin -eq 'Offline') { '(JSON)' } else { '(API)' }
-        Write-Log $Side "Loading $($Side.ToLowerInvariant()) policies from $TenantLabel $originDesc..." "INFO"
+        param([string]$Side, [string]$TenantLabel, [string]$TenantId, [string]$Origin, [string]$Filter)
+        Write-Log $Side "Loading policies from $($Side.ToLowerInvariant()) '$TenantLabel' (id: $TenantId)..." "INFO"
         Write-Log $Side "Policy name filter: $(if ($Filter) { "'$Filter'" } else { 'None' })" "INFO"
         Write-Log $Side "Platform filter: $(Get-PlatformsText $loadPlatforms)" "INFO"
     }
 
-    # Resolve paths — no fallback for offline tenants: path must be set in config
+    # Resolve paths — no fallback for offline baselines: path must be set in config
     $resolvedSourcePath = if ($sourceOrigin -eq 'Online') {
         $null
     } elseif ($cfg.source -and $cfg.source.PSObject.Properties['path'] -and $cfg.source.path -and $cfg.source.path.Trim()) {
@@ -522,24 +503,18 @@ $cli = {
     $pathErrors = $false
     if ($sourceOrigin -eq 'Offline') {
         if (-not $resolvedSourcePath) {
-            $srcLabel = if ($cfg.source -and $cfg.source.PSObject.Properties['displayName'] -and $cfg.source.displayName) { $cfg.source.displayName } else { $SourceId }
+            $srcLabel = if ($cfg.source -and $cfg.source.PSObject.Properties['displayName'] -and $cfg.source.displayName) { $cfg.source.displayName } else { $Source }
             Write-Log "Source" "No path configured for '$srcLabel'. Set a policy folder in Config.json" "ERROR"
             $pathErrors = $true
         } else {
-            if (-not (Test-Path $resolvedSourcePath)) {
-                try {
-                    New-Item -ItemType Directory -Path $resolvedSourcePath -Force | Out-Null
-                    Write-Log "Source" "Created folder: $resolvedSourcePath" "INFO"
-                } catch {
-                    Write-Log "Source" "Could not create folder: $resolvedSourcePath. See the log file for details" "ERROR"
-                    Write-Log "Source" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
-                    $pathErrors = $true
-                }
-            }
-            if (-not $pathErrors) {
+            # A missing folder is reported, not created (as in the UI).
+            if (-not (Test-Path -LiteralPath $resolvedSourcePath -PathType Container)) {
+                Write-Log "Source" "Policy folder '$resolvedSourcePath' not found" "ERROR"
+                $pathErrors = $true
+            } else {
                 $srcJsonCount = @(Get-ChildItem -Path $resolvedSourcePath -Filter '*.json' -ErrorAction SilentlyContinue).Count
                 if ($srcJsonCount -eq 0) {
-                    Write-Log "Source" "No policies found in '$resolvedSourcePath'" "ERROR"
+                    Write-Log "Source" "No policies found in folder '$resolvedSourcePath'" "ERROR"
                     $pathErrors = $true
                 }
             }
@@ -547,24 +522,17 @@ $cli = {
     }
     if ($targetOrigin -eq 'Offline') {
         if (-not $resolvedTargetPath) {
-            $tgtLabel = if ($cfg.target -and $cfg.target.PSObject.Properties['displayName'] -and $cfg.target.displayName) { $cfg.target.displayName } else { $TargetId }
+            $tgtLabel = if ($cfg.target -and $cfg.target.PSObject.Properties['displayName'] -and $cfg.target.displayName) { $cfg.target.displayName } else { $Target }
             Write-Log "Target" "No path configured for '$tgtLabel'. Set a policy folder in Config.json" "ERROR"
             $pathErrors = $true
         } else {
-            if (-not (Test-Path $resolvedTargetPath)) {
-                try {
-                    New-Item -ItemType Directory -Path $resolvedTargetPath -Force | Out-Null
-                    Write-Log "Target" "Created folder: $resolvedTargetPath" "INFO"
-                } catch {
-                    Write-Log "Target" "Could not create folder: $resolvedTargetPath. See the log file for details" "ERROR"
-                    Write-Log "Target" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
-                    $pathErrors = $true
-                }
-            }
-            if (Test-Path $resolvedTargetPath) {
+            if (-not (Test-Path -LiteralPath $resolvedTargetPath -PathType Container)) {
+                Write-Log "Target" "Policy folder '$resolvedTargetPath' not found" "ERROR"
+                $pathErrors = $true
+            } else {
                 $tgtJsonCount = @(Get-ChildItem -Path $resolvedTargetPath -Filter '*.json' -ErrorAction SilentlyContinue).Count
                 if ($tgtJsonCount -eq 0) {
-                    Write-Log "Target" "No policies found in '$resolvedTargetPath'" "ERROR"
+                    Write-Log "Target" "No policies found in folder '$resolvedTargetPath'" "ERROR"
                     $pathErrors = $true
                 }
             }
@@ -572,32 +540,18 @@ $cli = {
     }
     if ($pathErrors) { exit 1 }
 
-    # Now establish online connections — both attempted before aborting on failure
+    # Each side signs in right after its start lines, as in the UI: "Loading
+    # policies from source ...", the filters, then "Authenticating ...". A
+    # failed sign-in stops the run; New-GraphConnection already logged why
+    # ("Could not authenticate with Microsoft Graph ..."), so no extra line.
+    # A load that throws (e.g. policies that could not be fetched after all
+    # retries) stops the run too: comparing with an incomplete set would
+    # report the missing policies' settings as Missing.
+    Write-LoadStartLog -Side "Source" -TenantLabel $sourceLabel -TenantId $Source -Origin $sourceOrigin -Filter $SourceFilter
     if ($needSource) {
         $sourceConnection = New-GraphConnection -Config $cfg.source -Label "Source"
+        if (-not $sourceConnection) { exit 1 }
     }
-    if ($needTarget) {
-        $targetConnection = New-GraphConnection -Config $cfg.target -Label "Target"
-    }
-
-    # Report all connection failures at once
-    $connErrors = $false
-    if ($needSource -and -not $sourceConnection) {
-        # Same as the UI; the cause (token error) is logged just above.
-        Write-Log "Source" "Could not load policies. See the log file for details" "ERROR"
-        $connErrors = $true
-    }
-    if ($needTarget -and -not $targetConnection) {
-        Write-Log "Target" "Could not load policies. See the log file for details" "ERROR"
-        $connErrors = $true
-    }
-    if ($connErrors) { exit 1 }
-    $categoryConnection = if ($sourceConnection) { $sourceConnection } elseif ($targetConnection) { $targetConnection } else { $null }
-
-    # A load that throws (e.g. policies that could not be fetched after all
-    # retries) stops the run: comparing with an incomplete set would report the
-    # missing policies' settings as Missing.
-    Write-LoadStartLog -Side "Source" -TenantLabel $sourceLabel -Origin $sourceOrigin -Filter $SourceFilter
     try {
         $sourceExpanded = @(Resolve-PolicySource `
             -Origin $sourceOrigin -Connection $sourceConnection -Filter $SourceFilter `
@@ -606,17 +560,22 @@ $cli = {
             -Platforms $loadPlatforms -LogFile $_logFile)
     } catch {
         if (-not $_.Exception.Data['BasetuneLogged']) {
-            Write-Log "Source" "Load failed. See the log file for details" "ERROR"
+            Write-Log "Source" "Load failed. See Basetune.log for details" "ERROR"
             Write-Log "Source" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
         }
         exit 1
     }
 
     # Online or offline: without source policies there is nothing to compare.
-    # The load module already said why ("No policies match the filter 'x'").
+    # The load module already said why ("No policies match the selected filters").
     if ($sourceExpanded.Count -eq 0) { exit 1 }
 
-    Write-LoadStartLog -Side "Target" -TenantLabel $targetLabel -Origin $targetOrigin -Filter $TargetFilter
+    Write-LoadStartLog -Side "Target" -TenantLabel $targetLabel -TenantId $Target -Origin $targetOrigin -Filter $TargetFilter
+    if ($needTarget) {
+        $targetConnection = New-GraphConnection -Config $cfg.target -Label "Target"
+        if (-not $targetConnection) { exit 1 }
+    }
+    $categoryConnection = if ($sourceConnection) { $sourceConnection } elseif ($targetConnection) { $targetConnection } else { $null }
     try {
         $targetExpanded = @(Resolve-PolicySource `
             -Origin $targetOrigin -Connection $targetConnection -Filter $TargetFilter `
@@ -625,7 +584,7 @@ $cli = {
             -Platforms $loadPlatforms -LogFile $_logFile)
     } catch {
         if (-not $_.Exception.Data['BasetuneLogged']) {
-            Write-Log "Target" "Load failed. See the log file for details" "ERROR"
+            Write-Log "Target" "Load failed. See Basetune.log for details" "ERROR"
             Write-Log "Target" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
         }
         exit 1
@@ -661,7 +620,7 @@ $cli = {
     try {
         New-Item -ItemType Directory -Path $runReportDir -Force -ErrorAction Stop | Out-Null
     } catch {
-        Write-Log "Compare" "Could not create the report folder. See the log file for details" "ERROR"
+        Write-Log "Compare" "Could not create the report folder. See Basetune.log for details" "ERROR"
         Write-Log "Compare" "Details: '$runReportDir': $($_.Exception.Message)" "ERROR" -FileOnly
         exit 1
     }
@@ -686,7 +645,7 @@ $cli = {
             -ReportTheme        $reportTheme `
             -SuggestDownload    (-not (Test-DefinitionsRecent -DefinitionsPath $definitionsPath))
     } catch {
-        Write-Log "Compare" "Compare failed. See the log file for details" "ERROR"
+        Write-Log "Compare" "Compare failed. See Basetune.log for details" "ERROR"
         Write-Log "Compare" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
         exit 1
     }

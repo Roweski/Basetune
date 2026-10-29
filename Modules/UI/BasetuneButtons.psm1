@@ -8,7 +8,7 @@
 
 # Controls of the main and config window, by x:Name (BasetuneState.psm1).
 $script:UI = (Get-BasetuneContext).UI
-# Current job, list items, selection state (initialised in Basetune.ps1).
+# Current job, list items, selection state (initialised in BasetuneUI.ps1).
 $script:AppState = (Get-BasetuneContext).State
 
 # ── Busy state — turns the active Load button into Cancel; restores on done ──
@@ -510,7 +510,7 @@ function Update-ExportButtons {
         $canDo = $false
         if ($key) {
             $entry = $AppState.tenantList | Where-Object { $_.Key -eq $key } | Select-Object -First 1
-            # API and JSON tenants alike (the export writes the loaded
+            # Online tenants and offline baselines alike (the export writes the loaded
             # policies); at least one must be checked, or it makes an empty folder.
             $hasSelection = @($items | Where-Object { $_.IsChecked }).Count -gt 0
             $canDo = [bool]$entry -and $hasSelection

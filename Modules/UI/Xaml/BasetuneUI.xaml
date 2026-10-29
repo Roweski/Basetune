@@ -99,7 +99,7 @@
                         <!-- Same chevron as the dropdown arrow of the tenant lists
                              (ComboToggleTemplate): 8x4, stroke 1.5, round caps.
                              Turns 180 degrees on collapse/expand (animated in
-                             Basetune.ps1, 0.4 s). -->
+                             BasetuneUI.ps1, 0.4 s). -->
                         <Path x:Name="pathToggleLog" HorizontalAlignment="Center" VerticalAlignment="Center"
                               Data="M0,0 L4,4 L8,0" RenderTransformOrigin="0.5,0.5"
                               Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"

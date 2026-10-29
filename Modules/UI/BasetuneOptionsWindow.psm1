@@ -7,7 +7,7 @@
 $script:UI       = (Get-BasetuneContext).UI
 $script:AppState = (Get-BasetuneContext).State
 
-# Fixed default report folder (Basetune\Reports), see Basetune.ps1.
+# Fixed default report folder (Basetune\Reports), see BasetuneUI.ps1.
 function Get-DefaultReportPath { return $AppState.defaultReportPath }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -218,7 +218,7 @@ function Open-OptionsWindow {
             } catch {
                 # Options.json is separate: an unreadable Config.json does not
                 # block saving the options.
-                Write-Log 'Config' 'Could not save the settings. See the log file for details' 'ERROR'
+                Write-Log 'Config' 'Could not save Options.json. See Basetune.log for details' 'ERROR'
                 Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
                 [System.Windows.MessageBox]::Show("Error saving settings: $_", "Basetune", 'OK', 'Error') | Out-Null
             }
@@ -237,7 +237,7 @@ function Open-OptionsWindow {
 
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
-# Opens Options from the main window. Called once from Basetune.ps1.
+# Opens Options from the main window. Called once from BasetuneUI.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-OptionsWindowEvents {
     $UI.btnOpenOptions.Add_Click({ Open-OptionsWindow })

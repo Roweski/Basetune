@@ -133,7 +133,7 @@ function Update-Counts {
     }
     # Selection changed during a compare: its report will not match, so View
     # Report / View Details stay off afterwards. Logged once, not right now
-    # but after the "Resolving display names ..." line (see Add-UILogLines)
+    # but after the "All reports created successfully" line (see Add-UILogLines)
     # or at the end of the compare.
     if ($AppState.CurrentJob -and $AppState.CurrentJob.Type -eq 'Compare' -and $AppState.compareSelectionKey -and
         -not $AppState.compareSelectionChangedLogged -and -not (Test-SelectionSnapshot $AppState.compareSelectionKey)) {
@@ -207,7 +207,7 @@ function Reset-Side {
     $box  = if ($Side -eq 'Source') { $UI.txtSourceFilter }     else { $UI.txtTargetFilter }
     $hint = if ($Side -eq 'Source') { $UI.txtSourceFilterHint } else { $UI.txtTargetFilterHint }
     $wasSearch = ($hint -and $hint.Text -eq 'Filter policies')
-    # So is an unchanged load filter that gave "No policies match the filter".
+    # So is an unchanged load filter that gave "No policies match the selected filters".
     $wasNoMatch = ($box -and $box.Text -and $AppState.noMatchLoadFilter -and
                    $AppState.noMatchLoadFilter[$Side] -and $box.Text -eq $AppState.noMatchLoadFilter[$Side])
     if ($AppState.noMatchLoadFilter) { $AppState.noMatchLoadFilter[$Side] = $null }
@@ -239,14 +239,14 @@ function Set-FilterMode {
 # ── Message in the middle of an empty policy card ────────────────────────────
 # Empty list + a tenant: "Ready to load policies"; no tenant configured:
 # "Configure a tenant to get started"; a load on that side: "Loading policies"
-# / "Loading policies with filter 'x'". A "No ... matching 'x'" message from
+# / "Loading policies with name filter 'x'". A "No ... matching 'x'" message from
 # a load that found nothing is kept, unless -Force (tenant switch, typing in
 # that side's filter).
 $script:ReadyText    = 'Ready to load policies'
-$script:NoTenantText = 'Configure a tenant to get started'   # clickable (XAML trigger on this exact text + click handler in Basetune.ps1)
+$script:NoTenantText = 'Configure a tenant to get started'   # clickable (XAML trigger on this exact text + click handler in BasetuneUI.ps1)
 function Get-LoadingCardText {
     param([string]$Filter)
-    if ($Filter) { "Loading policies with filter '$Filter'" } else { 'Loading policies' }
+    if ($Filter) { "Loading policies with name filter '$Filter'" } else { 'Loading policies' }
 }
 function Update-EmptyState {
     param([string]$Side, [switch]$Force)
@@ -458,7 +458,7 @@ function Enable-WholeLineList {
         catch {
             if (-not $state.Logged) {
                 $state.Logged = $true
-                Write-UILog 'Basetune' 'Could not adjust the policy list layout. See the log file for details' 'WARN'
+                Write-UILog 'Basetune' 'Could not adjust the policy list layout. See Basetune.log for details' 'WARN'
                 Write-Log 'Basetune' "Details: $($_.Exception.Message)" 'WARN' -FileOnly
             }
         }
@@ -516,7 +516,7 @@ function Enable-PolicyListKeys {
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
 # Wires the policy list, filter and tenant dropdown handlers. Called once
-# from Basetune.ps1.
+# from BasetuneUI.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-PolicyListEvents {
     # Checkbox routed events → Update-Counts. Not during Set-VisibleSelection

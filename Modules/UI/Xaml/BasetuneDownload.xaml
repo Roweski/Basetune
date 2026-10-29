@@ -1,6 +1,6 @@
 <Window UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Setting Definitions"
+        Title="Download Definitions"
         SizeToContent="Height" Width="420"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize" WindowStyle="None"
         FontFamily="Segoe UI"
@@ -52,7 +52,7 @@
         <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="20,15,20,18">
             <StackPanel>
                 <!-- Label above the dropdown, same style as the Options window (FL). -->
-                <TextBlock Style="{StaticResource FL}" Text="Source Tenant"/>
+                <TextBlock Style="{StaticResource FL}" Text="Online Tenant"/>
                 <Grid>
                     <ComboBox x:Name="cmbDownloadTenant"/>
                     <!-- Placeholder until a tenant is picked (Download stays disabled until then) -->
@@ -74,7 +74,7 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Grid.Column="0" FontSize="13" Margin="0,0,12,2"
-                               Foreground="{DynamicResource SubTextBrush}" Text="Current definitions:"/>
+                               Foreground="{DynamicResource SubTextBrush}" Text="Current settings:"/>
                     <TextBlock Grid.Row="0" Grid.Column="1" FontSize="13" Margin="0,0,0,2"
                                x:Name="txtDlgDefCount" Text="-"/>
                     <TextBlock Grid.Row="1" Grid.Column="0" FontSize="13" Margin="0,0,12,2"
