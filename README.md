@@ -56,20 +56,14 @@ A setting without a definition is still compared but shown with its raw ID. Miss
 
 Each comparison generates the following files:
 
-- **Report.html** — Interactive overview with one row per unique setting and an aggregated status.
-- **Diff.csv** — Detailed results with one row per source setting and target policy match.
+- **Report.html** — Interactive overview with one row per source policy setting and an aggregated status.
+- **Diff.csv** — Detailed results with one row per source policy setting and target policy.
 - **Summary.csv** — Compliance summary for each source policy.
 - **Compare.log** — Log of compared policies, duplicate policy names or IDs, and skipped settings.
 
 <br>
 
-The HTML report is interactive and works offline as a standalone file in any browser.
-
-![Basetune Report](docs/Report.png)
-
-<br>
-
-The report identifies one of four outcomes for each comparison:
+Each setting is given one of four statuses:
 
 - **Match** — The setting is present in the target with the same value.
 - **Diff** — The setting is present in the target but has a different value.
@@ -83,6 +77,15 @@ Basetune also detects cross-policy issues within the target:
 - **Duplicate** — The setting appears in multiple target policies with the same value.
 - **Conflict** — The setting appears in multiple target policies with different values.
 
+
+<br>
+
+The HTML report is a standalone file that works offline in any browser.
+
+> When a setting is found in multiple target policies, Diff takes precedence over Match. Target policies with conflicting values are reported as Diff (Issue: Conflict).
+
+![Basetune Report](docs/Report.png)
+
 <br>
 
 ## CLI
@@ -90,6 +93,8 @@ Basetune also detects cross-policy issues within the target:
 Basetune includes a command-line interface for running comparisons and exports from a terminal or automation script.
 
 ![Basetune CLI](docs/CLI.png)
+
+<br>
 
 Examples:
 
@@ -169,7 +174,7 @@ An offline baseline accepts Intune Settings Catalog and Security Baseline JSON f
 | **Basetune UI** | Click the export button |
 | **Basetune CLI** | Use `-Export <tenant id>` |
 | **Intune portal** | Devices → Configuration → select policy → Export JSON |
-| **PowerShell** | Export JSON files using Microsoft Graph PowerShell |
+| **PowerShell** | Export JSON files using Microsoft Graph |
 | **[Open Intune Baseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline)** | Download JSON files from GitHub |
 | **[Micke-K IntuneManagement](https://github.com/Micke-K/IntuneManagement)** | Export Settings Catalog policies via the built-in export |
 
