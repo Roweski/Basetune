@@ -23,7 +23,7 @@
 @{
     # The Basetune version, the one place to change it for a release (UI
     # title, CLI -Help, log file, report footer; Get-BasetuneVersion).
-    ModuleVersion = '3.0.2'
+    ModuleVersion = '3.0.3'
 
     NestedModules = @(
         'BasetuneHelpers.psm1',

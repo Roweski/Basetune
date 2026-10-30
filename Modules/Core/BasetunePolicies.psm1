@@ -688,7 +688,8 @@ function Get-SettingPath {
 # DIFF RESOLVE: SETTING NAMES AND VALUES
 # Walks the compare rows and gives each one its full setting path and the
 # display names of its source and target values (Diff.csv, Summary.csv and
-# the report all use these rows).
+# the report all use these rows). The rows of Compare-RawSettings are changed
+# in place (Setting, SourceValue, TargetValue) and output.
 # ─────────────────────────────────────────────────────────────────────────────
 function Resolve-DiffSettings {
     param(
@@ -748,22 +749,119 @@ function Resolve-DiffSettings {
             }
         }
 
-        [PSCustomObject]@{
-            DefinitionId     = $d.DefinitionId
-            Setting          = $fullSetting
-            Status           = $d.Status
-            Issue            = $d.Issue
-            # Ids: two policies can have the same name. Grouping (merge,
-            # issue, summary, report) is done on the id, the name is shown.
-            SourcePolicyId   = $d.SourcePolicyId
-            TargetPolicyId   = $d.TargetPolicyId
-            SourcePolicyName = $d.SourcePolicyName
-            TargetPolicyName = $d.TargetPolicyName
-            SourceValue      = $resolvedSource
-            TargetValue      = $resolvedTarget
-            SourcePlatform   = $d.SourcePlatform
-            TargetPlatform   = $d.TargetPlatform
+        # Set in place on the compare row (it has an empty Setting): a new
+        # object per row costs seconds on 300,000 rows. The policy ids stay:
+        # two policies can have the same name. Grouping (merge, issue,
+        # summary, report) is done on the id, the name is shown.
+        $d.Setting     = $fullSetting
+        $d.SourceValue = $resolvedSource
+        $d.TargetValue = $resolvedTarget
+        $d
+    }
+}
+# ─────────────────────────────────────────────────────────────────────────────
+# ALIGN CHILDREN WITH EVERY TARGET POLICY (for Merge-EnabledWithChildren)
+#
+# The merge groups on the target policy (id), so a parent and child only
+# merge when both carry the same target policy. That fails when:
+#   * the target has the parent Disabled: Intune omits the children of a
+#     disabled ADMX parent, so the child has no target policy at all;
+#   * only some of several target policies carry the child: the others show
+#     a bare "Enabled" next to "Enabled: <value>".
+# The source side of a child does not depend on the target policy, so each
+# target policy holding the parent gets a copy of every child (empty target
+# value where it has none). A parent absent from the target: left alone,
+# nothing to merge into, it stays Missing.
+# Input: the rows of one Setting + source policy (id), in compare order.
+# Output: those rows (parents first when aligned) plus the copied children;
+# every row keeps the Setting and source policy of the input.
+# ─────────────────────────────────────────────────────────────────────────────
+function script:Get-AlignedSettingRows {
+    param($Rows, [string[]]$ToggleLike)
+
+    # Parent = enabled/disabled toggle row, child = every other row. Plain
+    # loops instead of Where-Object: this runs for every setting.
+    $sgParents  = @(foreach ($r in $Rows) {
+        if (($r.SourceValue -and $r.SourceValue.Trim().ToLower() -in $ToggleLike) -or
+            ($r.TargetValue -and $r.TargetValue.Trim().ToLower() -in $ToggleLike)) { $r }
+    })
+    $sgChildren = @(foreach ($r in $Rows) {
+        if (-not (($r.SourceValue -and $r.SourceValue.Trim().ToLower() -in $ToggleLike) -or
+                  ($r.TargetValue -and $r.TargetValue.Trim().ToLower() -in $ToggleLike))) { $r }
+    })
+
+    # Rows without a source policy (Extra) have no source side to copy, and
+    # their group lumps every target policy together: copying would make a
+    # fake "Missing" child for the others, merged into a false "Diff".
+    $noSource = -not $Rows[0].SourcePolicyId
+    if ($noSource -or $sgParents.Count -eq 0 -or $sgChildren.Count -eq 0) {
+        return $Rows
+    }
+    # Target policies that carry the parent toggle, and the first parent row
+    # per target policy (name and platform for a copied child). One target
+    # policy (the usual case) needs no sort.
+    $parentByTarget = @{}
+    $parentIds      = @(foreach ($p in $sgParents) {
+        if (-not $p.TargetPolicyId) { continue }
+        if ($null -eq $parentByTarget[$p.TargetPolicyId]) { $parentByTarget[$p.TargetPolicyId] = $p }
+        $p.TargetPolicyId
+    })
+    $oneTarget = $true
+    foreach ($id in $parentIds) { if ($id -cne $parentIds[0]) { $oneTarget = $false; break } }
+    $parentTargets = if ($parentIds.Count -eq 0) { @() }
+                     elseif ($oneTarget) { @($parentIds[0]) }
+                     else { @($parentIds | Sort-Object -Unique) }
+    if ($parentTargets.Count -eq 0) {
+        return $Rows
+    }
+
+    $sgParents
+
+    # One representative per child definition, for its source-side value.
+    $childTemplates = if ($sgChildren.Count -eq 1) { @($sgChildren[0]) }
+                      else { @($sgChildren | Group-Object DefinitionId | ForEach-Object { $_.Group[0] }) }
+
+    # First child row per DefinitionId + target policy (not case sensitive,
+    # like -eq): a lookup, not a scan per target and child.
+    $childByKey = @{}
+    foreach ($c in $sgChildren) {
+        if (-not $c.TargetPolicyId) { continue }
+        $ck = "$($c.DefinitionId)`0$($c.TargetPolicyId)"
+        if ($null -eq $childByKey[$ck]) { $childByKey[$ck] = $c }
+    }
+
+    foreach ($t in $parentTargets) {
+        foreach ($tpl in $childTemplates) {
+            $existing = $childByKey["$($tpl.DefinitionId)`0$t"]
+
+            if ($existing) {
+                $existing
+            } else {
+                # Target name and platform: from the parent row of that policy.
+                $tParent = $parentByTarget[$t]
+                [PSCustomObject]@{
+                    DefinitionId     = $tpl.DefinitionId
+                    Setting          = $tpl.Setting
+                    Status           = 'Missing'
+                    Issue            = $tpl.Issue
+                    SourcePolicyId   = $tpl.SourcePolicyId
+                    TargetPolicyId   = $t
+                    SourcePolicyName = $tpl.SourcePolicyName
+                    TargetPolicyName = $tParent.TargetPolicyName
+                    SourceValue      = $tpl.SourceValue
+                    TargetValue      = $null
+                    SourcePlatform   = $tpl.SourcePlatform
+                    TargetPlatform   = $tParent.TargetPlatform
+                    Platform         = $null   # Diff.csv label, set on export
+                }
+            }
         }
+    }
+
+    # Child rows pointing at a target policy that has no parent toggle are not
+    # represented above; keep them so nothing is silently dropped.
+    foreach ($c in $sgChildren) {
+        if ($c.TargetPolicyId -and $c.TargetPolicyId -notin $parentTargets) { $c }
     }
 }
 # ─────────────────────────────────────────────────────────────────────────────
@@ -781,6 +879,8 @@ function Resolve-DiffSettings {
 #   - Parent "disabled" / "false" → "Disabled" (no child expected)
 #   - Parent "enabled" / "true"   → "Enabled: <child value>"
 #   - Rows without an enabled/disabled pattern remain unchanged
+# Input rows are output themselves where possible and changed in place (values
+# normalised, Issue recomputed): pass rows that are not used afterwards.
 # ─────────────────────────────────────────────────────────────────────────────
 function Merge-EnabledWithChildren {
     param(
@@ -792,207 +892,151 @@ function Merge-EnabledWithChildren {
     $enabledLike  = @('enabled', 'true')
     $disabledLike = @('disabled', 'false')
     $toggleLike   = $enabledLike + $disabledLike
-    # --- Align children with every target policy ----------------------------
-    # The merge below groups on the target policy (id), so a parent and child
-    # only merge when both carry the same target policy. That fails when:
-    #   * the target has the parent Disabled: Intune omits the children of a
-    #     disabled ADMX parent, so the child has no target policy at all;
-    #   * only some of several target policies carry the child: the others
-    #     show a bare "Enabled" next to "Enabled: <value>".
-    # The source side of a child does not depend on the target policy, so each
-    # target policy holding the parent gets a copy of every child (empty
-    # target value where it has none). A parent absent from the target: left
-    # alone, nothing to merge into, it stays Missing.
-    # Rows are output by the loop into $aligned (a List.Add per row is slow on
-    # 50,000+ rows). Policy ids, not names: two policies can share a name.
-    $aligned = foreach ($sg in ($Resolved | Group-Object -Property Setting, SourcePolicyId)) {
-        $sgRows = @($sg.Group)
 
-        # Parent = enabled/disabled toggle row, child = every other row. Plain
-        # loops instead of Where-Object: this runs for every setting.
-        $sgParents  = @(foreach ($r in $sgRows) {
-            if (($r.SourceValue -and $r.SourceValue.Trim().ToLower() -in $toggleLike) -or
-                ($r.TargetValue -and $r.TargetValue.Trim().ToLower() -in $toggleLike)) { $r }
-        })
-        $sgChildren = @(foreach ($r in $sgRows) {
-            if (-not (($r.SourceValue -and $r.SourceValue.Trim().ToLower() -in $toggleLike) -or
-                      ($r.TargetValue -and $r.TargetValue.Trim().ToLower() -in $toggleLike))) { $r }
-        })
+    # --- Groups: Setting + source policy, then target policy -----------------
+    # The rows of one Setting + source policy (id) are aligned first (children
+    # copied to every target policy, Get-AlignedSettingRows), then split per
+    # target policy and merged below. Every row the alignment outputs keeps the
+    # Setting and source policy of its group, so this is the same as grouping
+    # all aligned rows on Setting + source + target policy.
+    # Order: the groups sorted on Setting, source policy id, target policy id,
+    # rows in input order within a group (what Group-Object gives; the report
+    # takes the first row of a group, so the order shows). Group-RowsByKey
+    # instead of Group-Object: that takes a minute on 300,000 rows.
+    # Policy ids, not names: two policies can share a name.
+    $sgGroups = @(Group-RowsByKey -Rows $Resolved -Keys @(foreach ($r in $Resolved) { "$($r.Setting)`0$($r.SourcePolicyId)" }))
+    $sgGroups = @($sgGroups | Sort-Object -Property @{ Expression = { $_[0].Setting } }, @{ Expression = { $_[0].SourcePolicyId } })
 
-        # Rows without a source policy (Extra) have no source side to copy, and
-        # their group lumps every target policy together: copying would make a
-        # fake "Missing" child for the others, merged into a false "Diff".
-        $noSource = -not $sgRows[0].SourcePolicyId
-        if ($noSource -or $sgParents.Count -eq 0 -or $sgChildren.Count -eq 0) {
-            $sgRows
-            continue
-        }
-        # Target policies that carry the parent toggle, and the first parent
-        # row per target policy (name and platform for a copied child). One
-        # target policy (the usual case) needs no sort.
-        $parentByTarget = @{}
-        $parentIds      = @(foreach ($p in $sgParents) {
-            if (-not $p.TargetPolicyId) { continue }
-            if ($null -eq $parentByTarget[$p.TargetPolicyId]) { $parentByTarget[$p.TargetPolicyId] = $p }
-            $p.TargetPolicyId
-        })
-        $oneTarget = $true
-        foreach ($id in $parentIds) { if ($id -cne $parentIds[0]) { $oneTarget = $false; break } }
-        $parentTargets = if ($parentIds.Count -eq 0) { @() }
-                         elseif ($oneTarget) { @($parentIds[0]) }
-                         else { @($parentIds | Sort-Object -Unique) }
-        if ($parentTargets.Count -eq 0) {
-            $sgRows
-            continue
+    # Target policy id -> its place in the sorted ids (no target policy: ''),
+    # sorted once here: a Sort-Object per group below costs seconds on 20,000
+    # groups. Hashtable keys: not case sensitive, as the grouping.
+    $targetRank = @{}
+    $targetReps = foreach ($r in $Resolved) {
+        $tk = [string]$r.TargetPolicyId
+        if ($null -eq $targetRank[$tk]) { $targetRank[$tk] = 0; $r }
+    }
+    $rank = 0
+    foreach ($r in @($targetReps | Sort-Object -Property TargetPolicyId)) { $targetRank[[string]$r.TargetPolicyId] = ++$rank }
+
+    # Toggle row (parent): its source or target value is enabled / true /
+    # disabled / false (-match: not case sensitive, spaces around allowed).
+    # One -match per value: a method call per row (Trim, ToLower) is slow here.
+    $toggleRx   = '^\s*(?:enabled|true|disabled|false)\s*$'
+    $enabledRx  = '^\s*(?:enabled|true)\s*$'
+    $disabledRx = '^\s*(?:disabled|false)\s*$'
+
+    # Rows are output by the loops into $output (no List.Add per output row).
+    $output = foreach ($sgRows in $sgGroups) {
+        # Aligning only matters with a parent and a child in the group (rare).
+        $aligned = $sgRows
+        if ($sgRows.Count -gt 1) {
+            $hasParent = $false
+            $hasChild  = $false
+            foreach ($r in $sgRows) {
+                if ($r.SourceValue -match $toggleRx -or $r.TargetValue -match $toggleRx) { $hasParent = $true } else { $hasChild = $true }
+            }
+            if ($hasParent -and $hasChild) { $aligned = @(Get-AlignedSettingRows -Rows $sgRows -ToggleLike $toggleLike) }
         }
 
-        $sgParents
-
-        # One representative per child definition, for its source-side value.
-        $childTemplates = if ($sgChildren.Count -eq 1) { @($sgChildren[0]) }
-                          else { @($sgChildren | Group-Object DefinitionId | ForEach-Object { $_.Group[0] }) }
-
-        # First child row per DefinitionId + target policy (not case
-        # sensitive, like -eq): a lookup, not a scan per target and child.
-        $childByKey = @{}
-        foreach ($c in $sgChildren) {
-            if (-not $c.TargetPolicyId) { continue }
-            $ck = "$($c.DefinitionId)`0$($c.TargetPolicyId)"
-            if ($null -eq $childByKey[$ck]) { $childByKey[$ck] = $c }
+        # Split per target policy (Missing rows: no target policy, one group).
+        # One target policy needs no grouping or sort.
+        $firstTarget = [string]$aligned[0].TargetPolicyId
+        $oneTarget   = $true
+        foreach ($r in $aligned) { if ([string]$r.TargetPolicyId -ne $firstTarget) { $oneTarget = $false; break } }
+        if ($oneTarget) {
+            $targetGroups = , $aligned
+        } else {
+            # Sorted on the rank of the target policy id (each group has its
+            # own). Array.Sort sorts the positions (int[]), not the groups:
+            # PowerShell would pass a copy of an object[] items array.
+            $targetGroups = @(Group-RowsByKey -Rows $aligned -Keys @(foreach ($r in $aligned) { [string]$r.TargetPolicyId }))
+            $groupRanks   = [int[]]@(foreach ($tg in $targetGroups) { $targetRank[[string]$tg[0].TargetPolicyId] })
+            $order        = [int[]](0..($targetGroups.Count - 1))
+            [Array]::Sort($groupRanks, $order)
+            $targetGroups = @(foreach ($o in $order) { , $targetGroups[$o] })
         }
 
-        foreach ($t in $parentTargets) {
-            foreach ($tpl in $childTemplates) {
-                $existing = $childByKey["$($tpl.DefinitionId)`0$t"]
-
-                if ($existing) {
-                    $existing
-                } else {
-                    # Target name and platform: from the parent row of that policy.
-                    $tParent = $parentByTarget[$t]
-                    [PSCustomObject]@{
-                        DefinitionId     = $tpl.DefinitionId
-                        Setting          = $tpl.Setting
-                        Status           = 'Missing'
-                        Issue            = $tpl.Issue
-                        SourcePolicyId   = $tpl.SourcePolicyId
-                        TargetPolicyId   = $t
-                        SourcePolicyName = $tpl.SourcePolicyName
-                        TargetPolicyName = $tParent.TargetPolicyName
-                        SourceValue      = $tpl.SourceValue
-                        TargetValue      = $null
-                        SourcePlatform   = $tpl.SourcePlatform
-                        TargetPlatform   = $tParent.TargetPlatform
-                    }
+        foreach ($rows in $targetGroups) {
+            if ($rows.Count -eq 1) {
+                # Single row — only normalise Enabled/Disabled if there is no
+                # child. The row itself is output, changed in place (a new
+                # object per row costs seconds: over half the rows of a large
+                # set are toggles). Each input row is output once.
+                $r = $rows[0]
+                if ($r.SourceValue -match $enabledRx)      { $r.SourceValue = 'Enabled' }
+                elseif ($r.SourceValue -match $disabledRx) { $r.SourceValue = 'Disabled' }
+                if ($r.TargetValue -match $enabledRx)      { $r.TargetValue = 'Enabled' }
+                elseif ($r.TargetValue -match $disabledRx) { $r.TargetValue = 'Disabled' }
+                $r
+                continue
+            }
+            # Multiple rows — find the parent (enabled/disabled toggle)
+            $parentRows = @(foreach ($r in $rows) {
+                if (($r.SourceValue -and $r.SourceValue.Trim().ToLower() -in $toggleLike) -or
+                    ($r.TargetValue -and $r.TargetValue.Trim().ToLower() -in $toggleLike)) { $r }
+            })
+            $childRows  = @(foreach ($r in $rows) {
+                if (-not (($r.SourceValue -and $r.SourceValue.Trim().ToLower() -in $toggleLike) -or
+                          ($r.TargetValue -and $r.TargetValue.Trim().ToLower() -in $toggleLike))) { $r }
+            })
+            if ($parentRows.Count -eq 0 -or $childRows.Count -eq 0) {
+                # No clear parent/child pattern — pass all rows through unchanged
+                $rows
+                continue
+            }
+            # Take the first parent (normally there is only one)
+            $parent = $parentRows[0]
+            $sv = if ($parent.SourceValue) { $parent.SourceValue.Trim().ToLower() } else { $null }
+            $tv = if ($parent.TargetValue) { $parent.TargetValue.Trim().ToLower() } else { $null }
+            $sourceEnabled  = $sv -in $enabledLike
+            $sourceDisabled = $sv -in $disabledLike
+            $targetEnabled  = $tv -in $enabledLike
+            $targetDisabled = $tv -in $disabledLike
+            foreach ($child in $childRows) {
+                # "Enabled: <value>" only with a value; else "Enabled" (a trailing
+                # "Enabled: " reads like a blank value, not "sub-setting unset").
+                $newSource = if ($sourceEnabled)       { if ($child.SourceValue) { "Enabled: $($child.SourceValue)" } else { "Enabled" } }
+                             elseif ($sourceDisabled)  { "Disabled" }
+                             else                      { $child.SourceValue }
+                $newTarget = if ($targetEnabled)       { if ($child.TargetValue) { "Enabled: $($child.TargetValue)" } else { "Enabled" } }
+                             elseif ($targetDisabled)  { "Disabled" }
+                             else                      { $child.TargetValue }
+                # Status from the merged values, never the child's own Status: with
+                # the parent toggle different (Enabled / Disabled) and the child
+                # value equal, the child is "Match" but the merged row differs (and
+                # this merge consumes the parent row with the real "Diff").
+                # Missing/Extra stay only when the merged row has no counterpart
+                # (not configured is not a value difference). A copied child under
+                # a Disabled parent in the target does have one: that is a Diff.
+                $mergedStatus = if ($newSource -eq $newTarget) {
+                                    "Match"
+                                } elseif ($child.Status -eq 'Missing' -and -not $newTarget) {
+                                    'Missing'
+                                } elseif ($child.Status -eq 'Extra' -and -not $newSource) {
+                                    'Extra'
+                                } else {
+                                    "Diff"
+                                }
+                [PSCustomObject]@{
+                    DefinitionId     = $child.DefinitionId
+                    Setting          = $child.Setting
+                    Status           = $mergedStatus
+                    Issue            = $child.Issue
+                    SourcePolicyId   = $child.SourcePolicyId
+                    TargetPolicyId   = $child.TargetPolicyId
+                    SourcePolicyName = $child.SourcePolicyName
+                    TargetPolicyName = $child.TargetPolicyName
+                    SourceValue      = $newSource
+                    TargetValue      = $newTarget
+                    SourcePlatform   = $child.SourcePlatform
+                    TargetPlatform   = $child.TargetPlatform
+                    Platform         = $null   # Diff.csv label, set on export
                 }
             }
-        }
-
-        # Child rows pointing at a target policy that has no parent toggle are
-        # not represented above; keep them so nothing is silently dropped.
-        foreach ($c in $sgChildren) {
-            if ($c.TargetPolicyId -and $c.TargetPolicyId -notin $parentTargets) { $c }
-        }
-    }
-    $Resolved = @($aligned)
-
-    # Group by Setting + source policy + target policy (ids); rows are output
-    # into $output (no List.Add, see $aligned above).
-    $groups = $Resolved | Group-Object -Property Setting, SourcePolicyId, TargetPolicyId
-    $output = foreach ($g in $groups) {
-        $rows = @($g.Group)
-        if ($rows.Count -eq 1) {
-            # Single row — only normalise Enabled/Disabled if there is no child
-            $r = $rows[0]
-            $sv = if ($r.SourceValue) { $r.SourceValue.Trim().ToLower() } else { $null }
-            $tv = if ($r.TargetValue) { $r.TargetValue.Trim().ToLower() } else { $null }
-            $newSource = if ($sv -in $enabledLike)      { "Enabled" }
-                         elseif ($sv -in $disabledLike) { "Disabled" }
-                         else { $r.SourceValue }
-            $newTarget = if ($tv -in $enabledLike)      { "Enabled" }
-                         elseif ($tv -in $disabledLike) { "Disabled" }
-                         else { $r.TargetValue }
-            [PSCustomObject]@{
-                DefinitionId     = $r.DefinitionId
-                Setting          = $r.Setting
-                Status           = $r.Status
-                Issue            = $r.Issue
-                SourcePolicyId   = $r.SourcePolicyId
-                TargetPolicyId   = $r.TargetPolicyId
-                SourcePolicyName = $r.SourcePolicyName
-                TargetPolicyName = $r.TargetPolicyName
-                SourceValue      = $newSource
-                TargetValue      = $newTarget
-                SourcePlatform   = $r.SourcePlatform
-                TargetPlatform   = $r.TargetPlatform
+            # Remaining parent rows (edge case: multiple parents) pass through unchanged
+            for ($i = 1; $i -lt $parentRows.Count; $i++) {
+                $parentRows[$i]
             }
-            continue
-        }
-        # Multiple rows — find the parent (enabled/disabled toggle)
-        $parentRows = @(foreach ($r in $rows) {
-            if (($r.SourceValue -and $r.SourceValue.Trim().ToLower() -in $toggleLike) -or
-                ($r.TargetValue -and $r.TargetValue.Trim().ToLower() -in $toggleLike)) { $r }
-        })
-        $childRows  = @(foreach ($r in $rows) {
-            if (-not (($r.SourceValue -and $r.SourceValue.Trim().ToLower() -in $toggleLike) -or
-                      ($r.TargetValue -and $r.TargetValue.Trim().ToLower() -in $toggleLike))) { $r }
-        })
-        if ($parentRows.Count -eq 0 -or $childRows.Count -eq 0) {
-            # No clear parent/child pattern — pass all rows through unchanged
-            $rows
-            continue
-        }
-        # Take the first parent (normally there is only one)
-        $parent = $parentRows[0]
-        $sv = if ($parent.SourceValue) { $parent.SourceValue.Trim().ToLower() } else { $null }
-        $tv = if ($parent.TargetValue) { $parent.TargetValue.Trim().ToLower() } else { $null }
-        $sourceEnabled  = $sv -in $enabledLike
-        $sourceDisabled = $sv -in $disabledLike
-        $targetEnabled  = $tv -in $enabledLike
-        $targetDisabled = $tv -in $disabledLike
-        foreach ($child in $childRows) {
-            # "Enabled: <value>" only with a value; else "Enabled" (a trailing
-            # "Enabled: " reads like a blank value, not "sub-setting unset").
-            $newSource = if ($sourceEnabled)       { if ($child.SourceValue) { "Enabled: $($child.SourceValue)" } else { "Enabled" } }
-                         elseif ($sourceDisabled)  { "Disabled" }
-                         else                      { $child.SourceValue }
-            $newTarget = if ($targetEnabled)       { if ($child.TargetValue) { "Enabled: $($child.TargetValue)" } else { "Enabled" } }
-                         elseif ($targetDisabled)  { "Disabled" }
-                         else                      { $child.TargetValue }
-            # Status from the merged values, never the child's own Status: with
-            # the parent toggle different (Enabled / Disabled) and the child
-            # value equal, the child is "Match" but the merged row differs (and
-            # this merge consumes the parent row with the real "Diff").
-            # Missing/Extra stay only when the merged row has no counterpart
-            # (not configured is not a value difference). A copied child under
-            # a Disabled parent in the target does have one: that is a Diff.
-            $mergedStatus = if ($newSource -eq $newTarget) {
-                                "Match"
-                            } elseif ($child.Status -eq 'Missing' -and -not $newTarget) {
-                                'Missing'
-                            } elseif ($child.Status -eq 'Extra' -and -not $newSource) {
-                                'Extra'
-                            } else {
-                                "Diff"
-                            }
-            [PSCustomObject]@{
-                DefinitionId     = $child.DefinitionId
-                Setting          = $child.Setting
-                Status           = $mergedStatus
-                Issue            = $child.Issue
-                SourcePolicyId   = $child.SourcePolicyId
-                TargetPolicyId   = $child.TargetPolicyId
-                SourcePolicyName = $child.SourcePolicyName
-                TargetPolicyName = $child.TargetPolicyName
-                SourceValue      = $newSource
-                TargetValue      = $newTarget
-                SourcePlatform   = $child.SourcePlatform
-                TargetPlatform   = $child.TargetPlatform
-            }
-        }
-        # Remaining parent rows (edge case: multiple parents) pass through unchanged
-        for ($i = 1; $i -lt $parentRows.Count; $i++) {
-            $parentRows[$i]
         }
     }
     # --- Recompute Issue over the merged rows --------------------------------
@@ -1005,26 +1049,30 @@ function Merge-EnabledWithChildren {
     # Per platform: rows without a source policy (Extra) are grouped per target
     # platform (a Windows and a macOS policy never reach the same device). Rows
     # with a source policy only hold target policies of its platform already.
+    # Group-RowsByKey, not Group-Object (see above). Per group: the first
+    # target value of each target policy, both not case sensitive (hashtable
+    # keys, as Sort-Object -Unique): one policy = None, one value =
+    # Duplicate, else Conflict.
     $final = @($output)
-    foreach ($ig in ($final | Group-Object -Property SourcePolicyId, DefinitionId,
-                                @{ Expression = { if ($_.SourcePolicyId) { '' } else { [string]$_.TargetPlatform } } })) {
-        $withTarget = @(foreach ($r in $ig.Group) { if ($r.TargetPolicyId) { $r } })
-        # One target policy (the usual case: one row, or rows of one policy
-        # with exactly the same id): 'None' without a pipeline or a sort.
-        $oneTarget = $true
-        foreach ($r in $withTarget) { if ($r.TargetPolicyId -cne $withTarget[0].TargetPolicyId) { $oneTarget = $false; break } }
-        $policies = if ($oneTarget) { @() }
-                    else { @($withTarget | ForEach-Object { $_.TargetPolicyId } | Sort-Object -Unique) }
-
-        $issue = if ($oneTarget -or $policies.Count -le 1) {
-            'None'
-        } else {
-            $values = @($withTarget | Sort-Object TargetPolicyId -Unique |
-                        ForEach-Object { [string]$_.TargetValue } | Sort-Object -Unique)
-            if ($values.Count -le 1) { 'Duplicate' } else { 'Conflict' }
+    $issueKeys = @(foreach ($r in $final) {
+        $ip = if ($r.SourcePolicyId) { '' } else { [string]$r.TargetPlatform }
+        "$($r.SourcePolicyId)`0$($r.DefinitionId)`0$ip"
+    })
+    foreach ($ig in @(Group-RowsByKey -Rows $final -Keys $issueKeys)) {
+        # One row (the usual case): None, no lookups needed.
+        if ($ig.Count -eq 1) { $ig[0].Issue = 'None'; continue }
+        $policyIds = @{}
+        $values    = @{}
+        foreach ($r in $ig) {
+            if ($r.TargetPolicyId -and $null -eq $policyIds[$r.TargetPolicyId]) {
+                $policyIds[$r.TargetPolicyId] = $true
+                $values[[string]$r.TargetValue] = $true
+            }
         }
-
-        foreach ($r in $ig.Group) { $r.Issue = $issue }
+        $issue = if ($policyIds.Count -le 1) { 'None' }
+                 elseif ($values.Count -le 1) { 'Duplicate' }
+                 else { 'Conflict' }
+        foreach ($r in $ig) { $r.Issue = $issue }
     }
 
     return $final

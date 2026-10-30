@@ -19,7 +19,10 @@
 #
 # Input  : two arrays of SettingObjects as produced by ConvertTo-SettingObjects
 # Output : array of result objects (Status, DefinitionId, Source/TargetPolicy,
-#          Source/TargetValue, ParentDefinitionId)
+#          Source/TargetValue, ParentDefinitionId). Issue, Setting and
+#          Platform are empty: filled in place by Add-IssueColumn,
+#          Resolve-DiffSettings and the Diff.csv export (Platform label) (a
+#          new object per row costs seconds on 300,000 rows).
 # ─────────────────────────────────────────────────────────────────────────────
 function Compare-RawSettings {
     param(
@@ -71,8 +74,11 @@ function Compare-RawSettings {
         if ($matched.Count -eq 0) {
             [PSCustomObject]@{
                 Status             = "Missing"
+                Issue              = $null
                 DefinitionId       = $s.DefinitionId
                 ParentDefinitionId = $s.ParentDefinitionId
+                Setting            = $null
+                Platform           = $null
                 SourcePolicyId     = $s.PolicyId
                 SourcePolicyName   = $s.PolicyName
                 SourceValue        = $s.RawValue
@@ -91,13 +97,16 @@ function Compare-RawSettings {
 
             [PSCustomObject]@{
                 Status             = $status
+                Issue              = $null
                 DefinitionId       = $s.DefinitionId
                 ParentDefinitionId = $s.ParentDefinitionId
+                Setting            = $null
+                Platform           = $null
                 SourcePolicyId     = $s.PolicyId
                 SourcePolicyName   = $s.PolicyName
+                SourceValue        = $s.RawValue
                 TargetPolicyId     = $t.PolicyId
                 TargetPolicyName   = $t.PolicyName
-                SourceValue        = $s.RawValue
                 TargetValue        = $t.RawValue
                 SourcePlatform     = $sPlat
                 TargetPlatform     = [string]$t.Platform
@@ -114,13 +123,16 @@ function Compare-RawSettings {
 
         [PSCustomObject]@{
             Status             = "Extra"
+            Issue              = $null
             DefinitionId       = $t.DefinitionId
             ParentDefinitionId = $t.ParentDefinitionId
+            Setting            = $null
+            Platform           = $null
             SourcePolicyId     = $null
             SourcePolicyName   = $null
+            SourceValue        = $null
             TargetPolicyId     = $t.PolicyId
             TargetPolicyName   = $t.PolicyName
-            SourceValue        = $null
             TargetValue        = $t.RawValue
             SourcePlatform     = $null
             TargetPlatform     = $tPlat
@@ -146,8 +158,9 @@ function Compare-RawSettings {
 # Extra rows: the same, over the target policies that hold the setting on
 # that platform (one policy: None).
 #
-# Input  : array of PSCustomObjects as returned by Compare-RawSettings
-# Output : same array with an extra 'Issue' property per object
+# Input  : array of PSCustomObjects as returned by Compare-RawSettings (with
+#          an empty Issue property)
+# Output : the same objects, Issue set in place
 # ─────────────────────────────────────────────────────────────────────────────
 function Add-IssueColumn {
     param(
@@ -209,7 +222,7 @@ function Add-IssueColumn {
         }
     }
 
-    # Each row with Issue added. The maps hold no $null, so an index lookup
+    # Issue set on each row. The maps hold no $null, so an index lookup
     # replaces ContainsKey.
     foreach ($d in $Diff) {
         $issue = $null
@@ -220,24 +233,71 @@ function Add-IssueColumn {
             $issue = $issueMap["$($d.DefinitionId.ToLower())|$p"]
         }
         if ($null -eq $issue) { $issue = 'None' }
-
-        [PSCustomObject]@{
-            Status             = $d.Status
-            Issue              = $issue
-            DefinitionId       = $d.DefinitionId
-            ParentDefinitionId = $d.ParentDefinitionId
-            SourcePolicyId     = $d.SourcePolicyId
-            SourcePolicyName   = $d.SourcePolicyName
-            SourceValue        = $d.SourceValue
-            TargetPolicyId     = $d.TargetPolicyId
-            TargetPolicyName   = $d.TargetPolicyName
-            TargetValue        = $d.TargetValue
-            SourcePlatform     = $d.SourcePlatform
-            TargetPlatform     = $d.TargetPlatform
-        }
+        $d.Issue = $issue
+        $d
     }
 }
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SORT DIFF ROWS (Diff.csv order)
+#
+# Order: source policy (name, then id: two policies with one name stay apart;
+# Extra rows without a source policy last), setting, target policy (name,
+# then id), DefinitionId, target value; not case sensitive, as Sort-Object.
+#
+# Sort-Object with these five keys takes ~10 s on 300,000 rows. Instead each
+# distinct value of a key gets a rank, by Sort-Object over those values only
+# (the same comparison, a few thousand values), and the rows are sorted on
+# one number built from their five ranks (Array.Sort on a long[]). The policy
+# keys are ranked per id (a name belongs to one id). Values that only differ
+# in case share a rank (hashtable keys), as Sort-Object sees them as equal.
+# When the ranks do not fit in a long (never seen: the product of the five
+# counts must stay below 2^63), Sort-Object is used as is.
+# ─────────────────────────────────────────────────────────────────────────────
+function script:Get-SortedDiffRows {
+    param([AllowEmptyCollection()][object[]]$Rows)
+    if ($Rows.Count -le 1) { return , @($Rows) }
+
+    $srcKey = @{ Expression = { if ($_.SourcePolicyName) { "0_$($_.SourcePolicyName)`0$($_.SourcePolicyId)" } else { "1_" } } }
+    $tgtKey = @{ Expression = { "$($_.TargetPolicyName)`0$($_.TargetPolicyId)" } }
+
+    # One row per distinct value of each key (first seen).
+    $srcReps = @{}; $setReps = @{}; $tgtReps = @{}; $defReps = @{}; $valReps = @{}
+    foreach ($r in $Rows) {
+        $k = [string]$r.SourcePolicyId; if ($null -eq $srcReps[$k]) { $srcReps[$k] = $r }
+        $k = [string]$r.Setting;        if ($null -eq $setReps[$k]) { $setReps[$k] = $r }
+        $k = [string]$r.TargetPolicyId; if ($null -eq $tgtReps[$k]) { $tgtReps[$k] = $r }
+        $k = [string]$r.DefinitionId;   if ($null -eq $defReps[$k]) { $defReps[$k] = $r }
+        $k = [string]$r.TargetValue;    if ($null -eq $valReps[$k]) { $valReps[$k] = $r }
+    }
+    $srcRank = @{}; $n = 0; foreach ($r in @($srcReps.Values | Sort-Object -Property $srcKey))                  { $srcRank[[string]$r.SourcePolicyId] = $n++ }
+    $setRank = @{}; $n = 0; foreach ($r in @($setReps.Values | Sort-Object -Property Setting))                  { $setRank[[string]$r.Setting] = $n++ }
+    $tgtRank = @{}; $n = 0; foreach ($r in @($tgtReps.Values | Sort-Object -Property $tgtKey))                  { $tgtRank[[string]$r.TargetPolicyId] = $n++ }
+    $defRank = @{}; $n = 0; foreach ($r in @($defReps.Values | Sort-Object -Property DefinitionId))             { $defRank[[string]$r.DefinitionId] = $n++ }
+    $valRank = @{}; $n = 0; foreach ($r in @($valReps.Values | Sort-Object -Property { [string]$_.TargetValue })) { $valRank[[string]$r.TargetValue] = $n++ }
+
+    if ([double]$srcRank.Count * $setRank.Count * $tgtRank.Count * $defRank.Count * $valRank.Count -ge [long]::MaxValue) {
+        return , @($Rows | Sort-Object -Property $srcKey, Setting, $tgtKey, DefinitionId, @{ Expression = { [string]$_.TargetValue } })
+    }
+    # Place values: key = (((src * sets + set) * tgts + tgt) * defs + def) * vals + val.
+    $m4 = [long]$valRank.Count
+    $m3 = $m4 * $defRank.Count
+    $m2 = $m3 * $tgtRank.Count
+    $m1 = $m2 * $setRank.Count
+    $keys = [long[]]::new($Rows.Count)
+    $i = 0
+    foreach ($r in $Rows) {
+        $keys[$i++] = $srcRank[[string]$r.SourcePolicyId] * $m1 + $setRank[[string]$r.Setting] * $m2 +
+                      $tgtRank[[string]$r.TargetPolicyId] * $m3 + $defRank[[string]$r.DefinitionId] * $m4 +
+                      $valRank[[string]$r.TargetValue]
+    }
+    # Array.Sort sorts the positions (int[]), not the rows: PowerShell would
+    # pass a copy of an object[] items array.
+    $order = [int[]](0..($Rows.Count - 1))
+    [Array]::Sort($keys, $order)
+    return , @(foreach ($j in $order) { $Rows[$j] })
+}
 
 # "Read 1240 settings from 45 source policies" (singular for 1).
 function Format-ReadSettingsLine {
@@ -410,22 +470,9 @@ function Invoke-BaselineCompare {
         Write-Log "Compare" $doneText "INFO"
     } else {
         Write-Log "Compare" "Skipping display names and categories" "INFO"
-        $resolved = @($diff | ForEach-Object {
-            [PSCustomObject]@{
-                DefinitionId     = $_.DefinitionId
-                Setting          = $_.DefinitionId
-                Status           = $_.Status
-                Issue            = $_.Issue
-                SourcePolicyId   = $_.SourcePolicyId
-                TargetPolicyId   = $_.TargetPolicyId
-                SourcePolicyName = $_.SourcePolicyName
-                TargetPolicyName = $_.TargetPolicyName
-                SourceValue      = $_.SourceValue
-                TargetValue      = $_.TargetValue
-                SourcePlatform   = $_.SourcePlatform
-                TargetPlatform   = $_.TargetPlatform
-            }
-        })
+        # The raw id as the setting name, set in place (see Compare-RawSettings).
+        foreach ($d in $diff) { $d.Setting = $d.DefinitionId }
+        $resolved = $diff
     }
 
     # Categories fetched from the API go back into the caller's table (UI
@@ -493,36 +540,40 @@ function Invoke-BaselineCompare {
         # Platform key -> label, looked up once per key (Get-PlatformLabel
         # runs a pipeline).
         $platformLabels = @{}
-        # Order: source policy (Extra rows last), setting, target policy,
-        # DefinitionId, value: never depends on the input order (the policy id
-        # keeps two policies with one name apart).
-        $sortedRows = $resolved |
-            Sort-Object { if ($_.SourcePolicyName) { "0_$($_.SourcePolicyName)`0$($_.SourcePolicyId)" } else { "1_" } }, Setting,
-                        { "$($_.TargetPolicyName)`0$($_.TargetPolicyId)" }, DefinitionId, { [string]$_.TargetValue }
-        # The CSV columns, in this order. One Platform column: Missing = source,
-        # Extra = target, Match/Diff = the same on both sides; an unknown
-        # platform (JSON export) takes the other side's. A plain loop, not
-        # Select-Object with a calculated property: several times faster.
-        $csvRows = foreach ($r in $sortedRows) {
+        # Order: see Get-SortedDiffRows (never depends on the input order).
+        $sortedRows = Get-SortedDiffRows -Rows $resolved
+        # One Platform column: Missing = source, Extra = target, Match/Diff =
+        # the same on both sides; an unknown platform (JSON export) takes the
+        # other side's. Set in place on the row's Platform property (see
+        # Compare-RawSettings), not a new object per row.
+        foreach ($r in $sortedRows) {
             $pk = if ($r.SourcePlatform) { $r.SourcePlatform } else { $r.TargetPlatform }
             $pl = ''
             if ($pk) {
                 $pl = $platformLabels[$pk]
                 if ($null -eq $pl) { $pl = Get-PlatformLabel $pk; $platformLabels[$pk] = $pl }
             }
-            [PSCustomObject]@{
-                Platform         = $pl
-                SourcePolicyName = $r.SourcePolicyName
-                Setting          = $r.Setting
-                Status           = $r.Status
-                Issue            = $r.Issue
-                SourceValue      = $r.SourceValue
-                TargetPolicyName = $r.TargetPolicyName
-                TargetValue      = $r.TargetValue
-                DefinitionId     = $r.DefinitionId
-            }
+            $r.Platform = $pl
         }
-        $csvRows | Export-Csv $diffCsv -NoTypeInformation -Encoding utf8BOM -Delimiter $csvSep -ErrorAction Stop
+        if ($sortedRows.Count -eq 0) {
+            @() | Export-Csv $diffCsv -NoTypeInformation -Encoding utf8BOM -Delimiter $csvSep -ErrorAction Stop
+        } else {
+            # The CSV columns, in this order: ConvertTo-Csv takes the columns
+            # of the first object (this empty header row) for every row, so
+            # the rows go in as they are. Its own line (line 2) is dropped:
+            # the header goes there and the file is written from line 2.
+            # Same text as Export-Csv (UTF-8 with BOM, CRLF, a final CRLF).
+            $header = [PSCustomObject]@{
+                Platform = $null; SourcePolicyName = $null; Setting = $null; Status = $null; Issue = $null
+                SourceValue = $null; TargetPolicyName = $null; TargetValue = $null; DefinitionId = $null
+            }
+            $lines = [string[]]@(@($header) + $sortedRows | ConvertTo-Csv -NoTypeInformation -Delimiter $csvSep)
+            $lines[1] = $lines[0]
+            # .NET resolves a relative path against the process folder, not
+            # the PowerShell location: the full path first.
+            $diffCsvFull = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($diffCsv)
+            [System.IO.File]::WriteAllLines($diffCsvFull, [System.Linq.Enumerable]::Skip($lines, 1), [System.Text.UTF8Encoding]::new($true))
+        }
         Write-Log "Report" "Saved $diffCsv ($($resolved.Count) rows)"
 
         Get-BaselineSummary -Rows $resolved |

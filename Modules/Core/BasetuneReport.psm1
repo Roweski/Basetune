@@ -18,37 +18,50 @@
 #   - any row Match             → Match (configured and equal in the target)
 #   - any row Missing           → Missing
 #   - otherwise                 → status of the first row
+# Applied inline in Get-BaselineSummary and Get-HtmlReport (a function call
+# per setting is slow on a large set): keep the two in line with these rules.
 # ─────────────────────────────────────────────────────────────────────────────
-function script:Get-AggregateStatus {
-    param([array]$Group)
-    $first = $Group[0]
-    if ($first.Issue -eq 'Conflict') { return 'Diff' }
-    $hasMatch = $false; $hasMissing = $false
-    foreach ($r in $Group) {
-        if ($r.Status -eq 'Diff') { return 'Diff' }
-        if ($r.Status -eq 'Match')   { $hasMatch = $true }
-        if ($r.Status -eq 'Missing') { $hasMissing = $true }
-    }
-    if ($hasMatch)   { return 'Match' }
-    if ($hasMissing) { return 'Missing' }
-    return $first.Status
-}
 
 # Unique target policy + value pairs of a group, sorted on policy name (the
 # detail rows in the report). One row - the usual case - needs no sort.
+# $TargetRank: target policy id -> place in the sort on name, then id
+# (Get-TargetPolicyRanks), so a group needs no Sort-Object (a cmdlet per
+# setting costs seconds on a large set).
 function script:Get-ReportTargets {
-    param([array]$Group)
+    param([array]$Group, [hashtable]$TargetRank)
     if ($Group.Count -eq 1) {
         if ($Group[0].TargetPolicyName) { return , @([ordered]@{ name = $Group[0].TargetPolicyName; value = $Group[0].TargetValue }) }
         return , @()
     }
-    # Unique per target policy id (two policies can share a name), sorted on
-    # name. Only the sort is a cmdlet: a cmdlet per step is slow on large sets.
-    $named = @(foreach ($r in $Group) { if ($r.TargetPolicyName) { $r } })
-    if ($named.Count -eq 0) { return , @() }
-    return , @(foreach ($r in ($named | Sort-Object { "$($_.TargetPolicyName)`0$($_.TargetPolicyId)" } -Unique)) {
-        [ordered]@{ name = $r.TargetPolicyName; value = $r.TargetValue }
+    # Unique per target policy id (two policies can share a name; the first
+    # row of an id), sorted on the rank. Array.Sort sorts the positions
+    # (int[]): PowerShell would pass a copy of an object[] items array.
+    $seen  = @{}
+    $named = @(foreach ($r in $Group) {
+        if ($r.TargetPolicyName -and $null -eq $seen[[string]$r.TargetPolicyId]) { $seen[[string]$r.TargetPolicyId] = $true; $r }
     })
+    if ($named.Count -eq 0) { return , @() }
+    $ranks = [int[]]@(foreach ($r in $named) { $TargetRank[[string]$r.TargetPolicyId] })
+    $order = [int[]](0..($named.Count - 1))
+    [Array]::Sort($ranks, $order)
+    return , @(foreach ($j in $order) {
+        [ordered]@{ name = $named[$j].TargetPolicyName; value = $named[$j].TargetValue }
+    })
+}
+
+# Target policy id -> its place when all target policies of the rows are
+# sorted on name, then id (not case sensitive, as Sort-Object). One
+# Sort-Object over the policies, for Get-ReportTargets.
+function script:Get-TargetPolicyRanks {
+    param([array]$Rows)
+    $reps = @{}
+    foreach ($r in $Rows) {
+        if ($r.TargetPolicyName -and $null -eq $reps[[string]$r.TargetPolicyId]) { $reps[[string]$r.TargetPolicyId] = $r }
+    }
+    $rank = @{}
+    $n    = 0
+    foreach ($r in @($reps.Values | Sort-Object { "$($_.TargetPolicyName)`0$($_.TargetPolicyId)" })) { $rank[[string]$r.TargetPolicyId] = $n++ }
+    return $rank
 }
 
 function Get-BaselineSummary {
@@ -58,46 +71,53 @@ function Get-BaselineSummary {
         [array]$Rows
     )
 
-    # A plain loop instead of Where-Object (50,000+ rows on a large set).
-    $sourceRows = @(foreach ($r in $Rows) { if ($r.SourcePolicyName) { $r } })
+    # One pass over the source rows (300,000+ on a large set; grouping them per
+    # policy and setting took seconds). Per policy id (two policies can share
+    # a name: one line each) and per setting name + DefinitionId (same name,
+    # other id counts twice), the aggregate status as a code, the highest of
+    # its rows (the aggregate status rules at the top): 3 = Diff (a Diff row,
+    # or Issue Conflict: the same for every row of a setting), 2 = Match,
+    # 1 = Missing, 0 = another status (counted as Diff). Hashtable keys are
+    # not case sensitive, as the grouping was.
+    $policies = @{}   # policy key -> @{ First = first row; Platform; Codes = @{ setting key -> code } }
+    foreach ($r in $Rows) {
+        if (-not $r.SourcePolicyName) { continue }
+        $pk = if ($r.SourcePolicyId) { [string]$r.SourcePolicyId } else { [string]$r.SourcePolicyName }
+        $p  = $policies[$pk]
+        if ($null -eq $p) {
+            $p = @{ First = $r; Platform = $null; Codes = @{} }
+            $policies[$pk] = $p
+        }
+        # Platform of the source policy: the first row with one tells it.
+        if (-not $p.Platform -and $r.SourcePlatform) { $p.Platform = $r.SourcePlatform }
+        $code = if ($r.Issue -eq 'Conflict' -or $r.Status -eq 'Diff') { 3 }
+                elseif ($r.Status -eq 'Match')   { 2 }
+                elseif ($r.Status -eq 'Missing') { 1 }
+                else { 0 }
+        $sk  = "$($r.Setting)`0$($r.DefinitionId)"
+        $cur = $p.Codes[$sk]
+        if ($null -eq $cur -or $code -gt $cur) { $p.Codes[$sk] = $code }
+    }
 
-    # Per policy id (two policies can share a name: one line each).
-    $byPolicy = $sourceRows | Group-Object -Property { if ($_.SourcePolicyId) { $_.SourcePolicyId } else { $_.SourcePolicyName } }
+    # Sorted on the policy id (name without one), as Group-Object did: two
+    # policies with one name keep that order in the final sort.
+    $byPolicy = @($policies.Values |
+                  Sort-Object -Property @{ Expression = { if ($_.First.SourcePolicyId) { $_.First.SourcePolicyId } else { $_.First.SourcePolicyName } } })
 
     $platformLabels = @{}   # platform key -> label, looked up once per key
-    $summary = foreach ($pg in $byPolicy) {
-
-        # Per setting name + DefinitionId (same name, other id counts twice).
-        $byDef   = $pg.Group | Group-Object -Property Setting, DefinitionId
-        $total   = 0
+    $summary = foreach ($p in $byPolicy) {
+        $total   = $p.Codes.Count
         $match   = 0
         $missing = 0
-        $diff    = 0
-
-        foreach ($dg in $byDef) {
-            $total++
-            # One row (the usual case): Get-AggregateStatus's rules inline (a
-            # function call per setting is slow on a large set).
-            $aggStatus = if ($dg.Count -eq 1) {
-                             $r1 = $dg.Group[0]
-                             if ($r1.Issue -eq 'Conflict' -or $r1.Status -eq 'Diff') { 'Diff' }
-                             elseif ($r1.Status -eq 'Match')   { 'Match' }
-                             elseif ($r1.Status -eq 'Missing') { 'Missing' }
-                             else { $r1.Status }
-                         } else { Get-AggregateStatus -Group @($dg.Group) }
-            switch ($aggStatus) {
-                'Match'   { $match++   }
-                'Missing' { $missing++ }
-                default   { $diff++    }
-            }
+        foreach ($c in $p.Codes.Values) {
+            if ($c -eq 2) { $match++ } elseif ($c -eq 1) { $missing++ }
         }
+        $diff = $total - $match - $missing
 
         $compliance = if ($total -gt 0) { [math]::Round(($match / $total) * 100, 2) } else { 0 }
 
-        # Platform of the source policy (one per policy: the first row with one
-        # tells it). First column.
-        $pk = $null
-        foreach ($r in $pg.Group) { if ($r.SourcePlatform) { $pk = $r.SourcePlatform; break } }
+        # Platform label: first column.
+        $pk = $p.Platform
         $pLabel = ''
         if ($pk) {
             $pLabel = $platformLabels[$pk]
@@ -105,7 +125,7 @@ function Get-BaselineSummary {
         }
         [PSCustomObject]@{
             Platform         = $pLabel
-            Policy           = $pg.Group[0].SourcePolicyName
+            Policy           = $p.First.SourcePolicyName
             Total            = $total
             Match            = $match
             Missing          = $missing
@@ -138,7 +158,7 @@ function script:Read-ReportTemplate {
 #   SourcePolicyName — baseline policy name
 #   Setting          — human-readable setting name
 #   SourceValue      — value in the baseline
-#   Status           — Match / Diff / Missing (Get-AggregateStatus over the
+#   Status           — Match / Diff / Missing (aggregate status rules over the
 #                      target rows); Extra = only in the target, these rows
 #                      come last, without policy or source value
 #   Issue            — None / Duplicate / Conflict
@@ -172,35 +192,57 @@ function Get-HtmlReport {
     # One row per source policy (by id: same names stay apart) + Setting +
     # SourceValue + DefinitionId, so two settings with the same name and value
     # (e.g. two ADMX versions of Edge Update "Allow installation") stay two rows.
-    $grouped = $sourceRows | Group-Object -Property { if ($_.SourcePolicyId) { $_.SourcePolicyId } else { $_.SourcePolicyName } }, Setting, SourceValue, DefinitionId
+    # The groups sorted on those four values, as Group-Object did: rows with
+    # the same policy name, setting and value keep that order in the sort
+    # below. Group-RowsByKey: Group-Object is slow on a large set.
+    $groupKeys = @(foreach ($r in $sourceRows) {
+        $p = if ($r.SourcePolicyId) { $r.SourcePolicyId } else { $r.SourcePolicyName }
+        "$p`0$($r.Setting)`0$($r.SourceValue)`0$($r.DefinitionId)"
+    })
+    $grouped = @(@(Group-RowsByKey -Rows $sourceRows -Keys $groupKeys) |
+                 Sort-Object -Property @{ Expression = { if ($_[0].SourcePolicyId) { $_[0].SourcePolicyId } else { $_[0].SourcePolicyName } } },
+                                       @{ Expression = { $_[0].Setting } }, @{ Expression = { $_[0].SourceValue } },
+                                       @{ Expression = { $_[0].DefinitionId } })
 
     $platformLabels = @{}   # platform key -> label, looked up once per key
+    $targetRank     = Get-TargetPolicyRanks -Rows $Rows
     $settings = foreach ($g in $grouped) {
-        $first  = $g.Group[0]
+        $first  = $g[0]
         $issue  = $first.Issue
 
-        # Status by Get-AggregateStatus (as summary.csv), not the first row: a
-        # group can hold several target policies in any order. Targets = the
-        # unique target policy + value pairs (detail rows). One row (the usual
-        # case): both inline (two function calls per setting are slow).
+        # Status by the aggregate status rules (top of this file, as
+        # summary.csv), not the first row: a group can hold several target
+        # policies in any order. Issue Conflict or a Diff row = Diff, else a
+        # Match row = Match, else a Missing row = Missing, else the first
+        # row's status.
+        $status = $null
+        if ($first.Issue -eq 'Conflict') { $status = 'Diff' }
+        else {
+            $hasMatch = $false; $hasMissing = $false
+            foreach ($r in $g) {
+                if ($r.Status -eq 'Diff') { $status = 'Diff'; break }
+                if ($r.Status -eq 'Match')   { $hasMatch = $true }
+                if ($r.Status -eq 'Missing') { $hasMissing = $true }
+            }
+            if (-not $status) {
+                $status = if ($hasMatch) { 'Match' } elseif ($hasMissing) { 'Missing' } else { $first.Status }
+            }
+        }
+        # Targets = the unique target policy + value pairs (detail rows). One
+        # row (the usual case on a normal set): inline.
         if ($g.Count -eq 1) {
-            $status = if ($first.Issue -eq 'Conflict' -or $first.Status -eq 'Diff') { 'Diff' }
-                      elseif ($first.Status -eq 'Match')   { 'Match' }
-                      elseif ($first.Status -eq 'Missing') { 'Missing' }
-                      else { $first.Status }
             # Assigned in each branch: an if used as a value would unroll the
             # array (one item, or $null for none).
             if ($first.TargetPolicyName) { $targets = @([ordered]@{ name = $first.TargetPolicyName; value = $first.TargetValue }) }
             else                         { $targets = @() }
         } else {
-            $status  = Get-AggregateStatus -Group @($g.Group)
-            $targets = Get-ReportTargets -Group $g.Group
+            $targets = Get-ReportTargets -Group $g -TargetRank $targetRank
         }
 
         # Platform of the source policy (one platform per policy). Not shown
         # as a column; used by the Platform filter in the report.
         $pk = $null
-        foreach ($r in $g.Group) { if ($r.SourcePlatform) { $pk = $r.SourcePlatform; break } }
+        foreach ($r in $g) { if ($r.SourcePlatform) { $pk = $r.SourcePlatform; break } }
         $pLabel = ''
         if ($pk) {
             $pLabel = $platformLabels[$pk]
@@ -230,7 +272,7 @@ function Get-HtmlReport {
     $extraRows = @(foreach ($r in $Rows) { if (-not $r.SourcePolicyName -and $r.Status -eq 'Extra') { $r } })
     $extras = foreach ($g in ($extraRows | Group-Object -Property Setting, { [string]$_.TargetPlatform }, DefinitionId)) {
         $first   = $g.Group[0]
-        $targets = Get-ReportTargets -Group $g.Group
+        $targets = Get-ReportTargets -Group $g.Group -TargetRank $targetRank
         $values = @($targets | ForEach-Object { [string]$_.value } | Sort-Object -Unique)
         $issue  = if ($targets.Count -le 1) { 'None' }
                   elseif ($values.Count -le 1) { 'Duplicate' }

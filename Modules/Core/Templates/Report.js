@@ -246,10 +246,12 @@
         const policy = document.getElementById('filterPolicy').value;
         const platform = document.getElementById('filterPlatform').value;
 
-        // Extra rows have no policy of their own: search them on the names
-        // of the target policies that carry the setting.
-        function extraPolicyHit(r) {
-            if (r.status !== 'Extra' || !r.targets) return false;
+        // The search also matches the target policies of a row (the detail
+        // rows), for every status: a policy name finds every row it is in,
+        // as source or as target (Extra rows have only targets). The Policy
+        // dropdown filters on the source policy only.
+        function targetPolicyHit(r) {
+            if (!r.targets) return false;
             for (var k = 0; k < r.targets.length; k++) {
                 if ((r.targets[k].name || '').toLowerCase().includes(search)) return true;
             }
@@ -260,7 +262,7 @@
             return (!search || (r.policy  || '').toLowerCase().includes(search) ||
                                (r.setting || '').toLowerCase().includes(search) ||
                                (r.value   || '').toLowerCase().includes(search) ||
-                               extraPolicyHit(r))
+                               targetPolicyHit(r))
                 && (!status || r.status === status)
                 && (!issue  || r.issue  === issue)
                 && (!policy || r.policy === policy)

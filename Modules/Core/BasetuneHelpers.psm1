@@ -636,6 +636,34 @@ public static extern System.IntPtr GetCurrentProcess();
     } catch {}
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GROUP ROWS BY KEY
+# Group-Object for the large row sets of a compare (300,000+ rows): Group-Object
+# and a List.Add per row each take seconds there. $Keys[i] is the key of
+# $Rows[i], built by the caller in a plain loop (a key scriptblock per row
+# would be slow again). Keys are not case sensitive, as with Group-Object.
+# Output: one array per group, in the order the groups first occur, rows in
+# input order. Group-Object sorts its groups on the key: sort the output with
+# Sort-Object on the same values (e.g. @{ Expression = { $_[0].Setting } })
+# where the order matters. Collect with @(): one group would unroll otherwise.
+# The rows of a group are chained by row number ($next), set by array index
+# (no method call per row).
+# ─────────────────────────────────────────────────────────────────────────────
+function Group-RowsByKey {
+    param([object[]]$Rows, [string[]]$Keys)
+    $last  = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $next  = [int[]]::new($Rows.Count + 1)   # row number (1-based) -> next row number in its group, 0 = last
+    $heads = for ($i = 1; $i -le $Rows.Count; $i++) {
+        $k = $Keys[$i - 1]
+        $l = $last[$k]
+        if ($null -eq $l) { $i } else { $next[$l] = $i }
+        $last[$k] = $i
+    }
+    foreach ($h in $heads) {
+        , @(for ($j = $h; $j -gt 0; $j = $next[$j]) { $Rows[$j - 1] })
+    }
+}
+
 Export-ModuleMember -Function @(
     'Get-BasetuneVersion',
     'Get-CsvDelimiter',
@@ -666,5 +694,6 @@ Export-ModuleMember -Function @(
     'Write-PlatformSkipLog',
     'Get-PolicyTypeLabel',
     'Get-PlatformsText',
-    'Get-NodeValue'
+    'Get-NodeValue',
+    'Group-RowsByKey'
 )

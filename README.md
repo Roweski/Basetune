@@ -13,7 +13,8 @@ Comparison capabilities:
 
 - **Live comparison** — Compare policies from online tenants via Microsoft Graph.
 - **Offline comparison** — Compare policies from offline baselines using JSON exports, without an internet connection. Setting and category definitions are stored locally for future comparisons.
-- **Platform-aware comparison** — Only policies for the selected platforms (Windows, macOS, iOS/iPadOS, Android, and Linux) are loaded and compared.
+- **Any combination** — Compare online tenants and offline baselines, using either as the source or target.
+- **Platform-aware** — Only policies for the selected platforms (Windows, macOS, iOS/iPadOS, Android, and Linux) are loaded and compared.
 
 <br>
 
@@ -161,13 +162,14 @@ When loading `Config\Config.json`, Basetune encrypts any plaintext client secret
 
 ## Offline JSON compatibility
 
-Offline mode accepts Intune Settings Catalog and Security Baseline JSON files exported by any of the following tools:
+An offline baseline accepts Intune Settings Catalog and Security Baseline JSON files exported by any of the following tools:
 
 | Source | How to export |
 |---|---|
 | **Basetune UI** | Click the export button |
 | **Basetune CLI** | Use `-Export <tenant id>` |
 | **Intune portal** | Devices → Configuration → select policy → Export JSON |
+| **PowerShell** | Export JSON files using Microsoft Graph PowerShell |
 | **[Open Intune Baseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline)** | Download JSON files from GitHub |
 | **[Micke-K IntuneManagement](https://github.com/Micke-K/IntuneManagement)** | Export Settings Catalog policies via the built-in export |
 
