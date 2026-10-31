@@ -11,6 +11,7 @@ Basetune is a PowerShell-based tool to compare Intune **Settings Catalog** and *
 
 Comparison capabilities:
 
+- **Every target policy** — Each source policy setting is compared against all selected target policies, so duplicate and conflicting settings across policies are detected.
 - **Live comparison** — Compare policies from online tenants via Microsoft Graph.
 - **Offline comparison** — Compare policies from offline baselines using JSON exports, without an internet connection. Setting and category definitions are stored locally for future comparisons.
 - **Any combination** — Compare online tenants and offline baselines, using either as the source or target.
