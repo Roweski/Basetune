@@ -7,7 +7,7 @@
 ## What it does
 Basetune is a PowerShell-based tool to compare Intune **Settings Catalog** and **Security Baseline** policies between online tenants via Microsoft Graph or offline baselines using JSON exports.
 
-![Basetune UI](docs/Main.png)
+![Basetune UI](docs/Main-3.0.4.png)
 
 Comparison capabilities:
 
@@ -83,7 +83,7 @@ Basetune also detects cross-policy issues within the target:
 
 The HTML report is a standalone file that works offline in any browser.
 
-![Basetune Report](docs/Report.png)
+![Basetune Report](docs/Report-3.0.4.png)
 
 <br>
 
@@ -97,7 +97,7 @@ The HTML report is a standalone file that works offline in any browser.
 
 Basetune includes a command-line interface for running comparisons and exports from a terminal or automation script.
 
-![Basetune CLI](docs/CLI.png)
+![Basetune CLI](docs/CLI-3.0.4.png)
 
 > The client secret in Config.json can only be decrypted by the Windows user who saved it. To run the CLI under another account (for example, as a scheduled task), use a separate Basetune folder for that account and enter the client secret once in Tenant Configuration while signed in as that account.
 
