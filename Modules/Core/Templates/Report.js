@@ -71,19 +71,19 @@
     var platformTotal = ALL_DATA.length;
     function updateTiles() {
         var platform = document.getElementById('filterPlatform').value;
-        var c = { total:0, Match:0, Diff:0, Missing:0, Extra:0, Duplicate:0, Conflict:0 };
+        var c = { total:0, Match:0, Diff:0, Missing:0, Extra:0, Duplicate:0, Conflict:0, None:0 };
         for (var i = 0; i < ALL_DATA.length; i++) {
             var r = ALL_DATA[i];
             if (platform && r.platform !== platform) continue;
             c.total++;
             if (c[r.status] !== undefined) c[r.status]++;
-            if (r.issue === 'Duplicate' || r.issue === 'Conflict') c[r.issue]++;
+            if (r.issue === 'Duplicate' || r.issue === 'Conflict' || r.issue === 'None') c[r.issue]++;
         }
         platformTotal = c.total;
         var set = function(cls, n) { var el = document.querySelector('.' + cls + ' .s-value'); if (el) el.textContent = n; };
         set('s-total', c.total);   set('s-match', c.Match);    set('s-diff', c.Diff);
         set('s-missing', c.Missing); set('s-extra', c.Extra);
-        set('s-dup', c.Duplicate);   set('s-conflict', c.Conflict);
+        set('s-dup', c.Duplicate);   set('s-conflict', c.Conflict); set('s-noissue', c.None);
     }
     updateTiles();   // first fill of the tiles (all platforms)
 
@@ -272,7 +272,8 @@
 
     // Status and issue filter: set by the tiles only (no dropdowns). One
     // status (Match / Diff / Missing / Extra) and one issue (Duplicate /
-    // Conflict) at a time; together they combine (Diff + Conflict).
+    // Conflict / None = the No issue tile) at a time; together they combine
+    // (Diff + Conflict, Diff + No issue).
     var selStatus = '', selIssue = '';
 
     // Tile click. A status or issue tile sets its own part of the filter, or
@@ -302,7 +303,8 @@
             's-missing':  selStatus === 'Missing',
             's-extra':    selStatus === 'Extra',
             's-dup':      selIssue  === 'Duplicate',
-            's-conflict': selIssue  === 'Conflict'
+            's-conflict': selIssue  === 'Conflict',
+            's-noissue':  selIssue  === 'None'
         };
         Object.keys(on).forEach(function (cls) {
             var el = document.querySelector('.stat-card.' + cls);
