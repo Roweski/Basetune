@@ -83,7 +83,7 @@ Basetune also detects cross-policy issues within the target:
 
 The HTML report is a standalone file that works offline in any browser.
 
-![Basetune Report](docs/Report-3.0.4.png)
+![Basetune Report](docs/Report-3.0.5.png)
 
 <br>
 
