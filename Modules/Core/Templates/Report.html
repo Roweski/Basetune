@@ -22,39 +22,34 @@
     </header>
 
     <div class="stats-grid">
-        <!-- Tab order: tiles (1-7), search (8), filters (9-12). The theme button
+        <!-- The tiles are the status and issue filter (no dropdowns for
+             those): a status tile and an issue tile combine (Diff + Conflict),
+             a second click on an active tile turns it off, Total clears all
+             filters but the platform (toggleCard in Report.js).
+             Tab order: tiles (1-7), filters (8-10), search (11), as on screen
+             (the search box is placed after the filters). The theme button
              and the page buttons are mouse-only (tabindex -1). -->
-        <div tabindex="1" role="button" class="stat-card s-total"   onclick="filterByCard('','')">        <div class="s-label">Total</div>     <div class="s-value"></div></div>
-        <div tabindex="2" role="button" class="stat-card s-match"   onclick="filterByCard('Match','')">   <div class="s-label">Match</div>     <div class="s-value"></div></div>
-        <div tabindex="3" role="button" class="stat-card s-diff"    onclick="filterByCard('Diff','')">    <div class="s-label">Diff</div>      <div class="s-value"></div></div>
-        <div tabindex="4" role="button" class="stat-card s-missing" onclick="filterByCard('Missing','')"> <div class="s-label">Missing</div>   <div class="s-value"></div></div>
-        <div tabindex="5" role="button" class="stat-card s-extra"   onclick="filterByCard('Extra','')">   <div class="s-label">Extra</div>     <div class="s-value"></div></div>
-        <div tabindex="6" role="button" class="stat-card s-dup"     onclick="filterByCard('','Duplicate')"><div class="s-label">Duplicate</div> <div class="s-value"></div></div>
-        <div tabindex="7" role="button" class="stat-card s-conflict" onclick="filterByCard('','Conflict')"><div class="s-label">Conflict</div> <div class="s-value"></div></div>
+        <div tabindex="1" role="button" class="stat-card s-total"   onclick="toggleCard('', '')"          title="Show all settings (clears the filters, not the platform)"><div class="s-label">Total</div>     <div class="s-value"></div></div>
+        <div tabindex="2" role="button" class="stat-card s-match"   onclick="toggleCard('status', 'Match')"   title="Filter on Match; combine with Duplicate"><div class="s-label">Match</div>     <div class="s-value"></div></div>
+        <div tabindex="3" role="button" class="stat-card s-diff"    onclick="toggleCard('status', 'Diff')"    title="Filter on Diff; combine with Duplicate or Conflict"><div class="s-label">Diff</div>      <div class="s-value"></div></div>
+        <div tabindex="4" role="button" class="stat-card s-missing" onclick="toggleCard('status', 'Missing')" title="Filter on Missing"><div class="s-label">Missing</div>   <div class="s-value"></div></div>
+        <div tabindex="5" role="button" class="stat-card s-extra"   onclick="toggleCard('status', 'Extra')"   title="Filter on Extra; combine with Duplicate or Conflict"><div class="s-label">Extra</div>     <div class="s-value"></div></div>
+        <div tabindex="6" role="button" class="stat-card s-dup"     onclick="toggleCard('issue', 'Duplicate')" title="Filter on Duplicate; combine with a status"><div class="s-label">Duplicate</div> <div class="s-value"></div></div>
+        <div tabindex="7" role="button" class="stat-card s-conflict" onclick="toggleCard('issue', 'Conflict')" title="Filter on Conflict; combine with Diff or Extra"><div class="s-label">Conflict</div> <div class="s-value"></div></div>
     </div>
 
     <div class="filters">
-        <input type="text" id="search" tabindex="8" placeholder="Search setting or policy..." oninput="applyFilters()">
-        <select id="filterStatus" tabindex="9" onchange="applyFilters()">
-            <option value="">All statuses</option>
-            <option value="Match">Match</option>
-            <option value="Diff">Diff</option>
-            <option value="Missing">Missing</option>
-            <option value="Extra">Extra</option>
-        </select>
-        <select id="filterIssue" tabindex="10" onchange="applyFilters()">
-            <option value="">All issues</option>
-            <option value="None">None</option>
-            <option value="Duplicate">Duplicate</option>
-            <option value="Conflict">Conflict</option>
-        </select>
+        <input type="text" id="search" tabindex="11" placeholder="Search setting or policy..." oninput="applyFilters()">
         <!-- Platform: only the platforms in this compare. The tiles count for
-             the chosen platform; the Policy list shows its policies. -->
-        <select id="filterPlatform" tabindex="11" onchange="onPlatformChange()">
+             the chosen platform; the policy lists show its policies. -->
+        <select id="filterPlatform" tabindex="8" onchange="onPlatformChange()">
             <option value="">All platforms</option>
         </select>
-        <select id="filterPolicy" tabindex="12" onchange="applyFilters()">
-            <option value="">All policies</option>
+        <select id="filterPolicy" tabindex="9" onchange="applyFilters()">
+            <option value="">All source policies</option>
+        </select>
+        <select id="filterTarget" tabindex="10" onchange="applyFilters()">
+            <option value="">All target policies</option>
         </select>
     </div>
     <div class="row-count" id="rowCount"></div>
@@ -64,7 +59,7 @@
             <table id="mainTable">
                 <thead>
                     <tr>
-                        <th onclick="sortTable(0)">Policy<span class="sort-indicator"></span></th>
+                        <th onclick="sortTable(0)">Source Policy<span class="sort-indicator"></span></th>
                         <th onclick="sortTable(1)">Setting<span class="sort-indicator"></span></th>
                         <th onclick="sortTable(2)">Source Value<span class="sort-indicator"></span></th>
                         <th class="col-status" onclick="sortTable(3)">Status<span class="sort-indicator"></span></th>

@@ -37,11 +37,13 @@
         </Grid>
 
     <!-- Outer spacing as in the main window: 20 left/right, 16 under the
-         title bar and at the bottom. Card padding 15 at the top, so the first
-         field lines up with the tenant dropdown in the main window (main card:
-         padding 10 + label 16 + 10 = 36; here 15 + label 17 + 4 = 36). 18 at
-         the bottom, 12 between the field rows. The Tenant Configuration window
-         is then not higher than the main window at its minimum height (400). -->
+         title bar and at the bottom. Card padding 10 at the top and sides, as
+         the tenant cards in the main window (same label style and 6 under it),
+         so the first field lines up with the tenant dropdown there. 15 at the
+         bottom: the label line box adds about 5 above its capitals, so the
+         visible gap from the card edge to the first label is about 15, and the
+         last input gets the same gap to the bottom edge. 12 between the field
+         rows. -->
     <Grid Margin="20,16,20,0">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -50,11 +52,11 @@
             <RowDefinition Height="16"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="20,15,20,18">
+        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="10,10,10,15">
             <StackPanel>
                 <Grid Margin="0,0,0,12">
                     <StackPanel>
-                        <TextBlock Style="{StaticResource FL}" Text="Report Folder"/>
+                        <TextBlock Style="{StaticResource FL}" Text="REPORT FOLDER"/>
                         <Grid>
                             <TextBox x:Name="cfgPathReport" Padding="8,4,32,4"/>
                             <Button x:Name="btnBrowsePathReport"
@@ -68,13 +70,13 @@
                 </Grid>
                 <!-- Platforms over the full width. -->
                 <StackPanel Margin="0,0,0,12">
-                    <TextBlock Style="{StaticResource FL}" Text="Platforms"/>
+                    <TextBlock Style="{StaticResource FL}" Text="PLATFORMS"/>
                     <!-- Multi-select: the items are checkboxes (filled by Open-OptionsWindow);
                          the text on top shows the selection ("Windows, macOS"). -->
                     <Grid>
                         <ComboBox x:Name="cmbPlatforms"
                                   ToolTip="Settings Catalog platforms to load"/>
-                        <TextBlock x:Name="txtPlatforms" IsHitTestVisible="False" FontSize="13"
+                        <TextBlock x:Name="txtPlatforms" IsHitTestVisible="False" FontSize="14"
                                    Margin="11,0,30,0" VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis"
                                    Foreground="{DynamicResource TextBrush}"/>
@@ -88,12 +90,12 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0">
-                        <TextBlock Style="{StaticResource FL}" Text="Theme"/>
+                        <TextBlock Style="{StaticResource FL}" Text="THEME"/>
                         <!-- Filled with Dark / Light by Open-OptionsWindow; applied on Save Settings. -->
                         <ComboBox x:Name="cmbTheme"/>
                     </StackPanel>
                     <StackPanel Grid.Column="2">
-                        <TextBlock Style="{StaticResource FL}" Text="Max Threads"/>
+                        <TextBlock Style="{StaticResource FL}" Text="MAX THREADS"/>
                         <!-- Filled with 1..32 by Open-OptionsWindow; only valid values can be picked. -->
                         <ComboBox x:Name="cmbMaxThreads"/>
                     </StackPanel>

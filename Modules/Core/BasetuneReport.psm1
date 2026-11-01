@@ -27,8 +27,12 @@
 # $TargetRank: target policy id -> place in the sort on name, then id
 # (Get-TargetPolicyRanks), so a group needs no Sort-Object (a cmdlet per
 # setting costs seconds on a large set).
+# -WithStatus: each target also gets its own row status (Match / Diff against
+# the source value), for the conflict rows: shows which target policy holds
+# the baseline value. Off for the other rows (their targets all share one
+# status, and the report data stays small).
 function script:Get-ReportTargets {
-    param([array]$Group, [hashtable]$TargetRank)
+    param([array]$Group, [hashtable]$TargetRank, [switch]$WithStatus)
     if ($Group.Count -eq 1) {
         if ($Group[0].TargetPolicyName) { return , @([ordered]@{ name = $Group[0].TargetPolicyName; value = $Group[0].TargetValue }) }
         return , @()
@@ -45,7 +49,9 @@ function script:Get-ReportTargets {
     $order = [int[]](0..($named.Count - 1))
     [Array]::Sort($ranks, $order)
     return , @(foreach ($j in $order) {
-        [ordered]@{ name = $named[$j].TargetPolicyName; value = $named[$j].TargetValue }
+        $t = [ordered]@{ name = $named[$j].TargetPolicyName; value = $named[$j].TargetValue }
+        if ($WithStatus) { $t.status = $named[$j].Status }
+        $t
     })
 }
 
@@ -204,6 +210,42 @@ function Get-HtmlReport {
                                        @{ Expression = { $_[0].Setting } }, @{ Expression = { $_[0].SourceValue } },
                                        @{ Expression = { $_[0].DefinitionId } })
 
+    # The same setting in more than one source policy: each row shows the
+    # other source policies (a +n marker next to the policy name, their names
+    # as tooltip, a click filters on the setting name; "srcs" / "sref" in the
+    # report data, see the JSON rows below). A baseline that holds a setting
+    # twice, maybe with two values, is a baseline issue of its own; Status
+    # and Issue stay about the target.
+    # Keyed on the setting name only, not the DefinitionId: a merged
+    # "Enabled: <value>" row carries its child's id, a "Disabled" row without
+    # child the parent's (Merge-EnabledWithChildren), so one setting would
+    # get two keys. Each source policy (id) once per setting: a policy can
+    # hold a setting in several groups (two values, two child ids).
+    # Two passes: count first (a hashtable increment is cheap), lists only
+    # for the keys that occur in more than one policy.
+    $srcSeen  = @{}   # setting + policy id -> $true
+    $srcCount = @{}   # setting -> number of source policies
+    foreach ($g in $grouped) {
+        if (-not $g[0].Setting) { continue }   # a $null hashtable key throws
+        $p = if ($g[0].SourcePolicyId) { $g[0].SourcePolicyId } else { $g[0].SourcePolicyName }
+        $sp = "$($g[0].Setting)`0$p"
+        if ($srcSeen[$sp]) { continue }
+        $srcSeen[$sp] = $true
+        $srcCount[$g[0].Setting] = 1 + [int]$srcCount[$g[0].Setting]
+    }
+    $srcSeen = @{}
+    $srcAlso = @{}   # setting -> source rows (one per policy) of that setting
+    foreach ($g in $grouped) {
+        $k = $g[0].Setting
+        if ($srcCount[$k] -le 1) { continue }
+        $p = if ($g[0].SourcePolicyId) { $g[0].SourcePolicyId } else { $g[0].SourcePolicyName }
+        $sp = "$k`0$p"
+        if ($srcSeen[$sp]) { continue }
+        $srcSeen[$sp] = $true
+        if ($null -eq $srcAlso[$k]) { $srcAlso[$k] = [System.Collections.Generic.List[object]]::new() }
+        $srcAlso[$k].Add($g[0])
+    }
+
     $platformLabels = @{}   # platform key -> label, looked up once per key
     $targetRank     = Get-TargetPolicyRanks -Rows $Rows
     $settings = foreach ($g in $grouped) {
@@ -236,7 +278,8 @@ function Get-HtmlReport {
             if ($first.TargetPolicyName) { $targets = @([ordered]@{ name = $first.TargetPolicyName; value = $first.TargetValue }) }
             else                         { $targets = @() }
         } else {
-            $targets = Get-ReportTargets -Group $g -TargetRank $targetRank
+            # A conflict always has two or more target rows: only this branch.
+            $targets = Get-ReportTargets -Group $g -TargetRank $targetRank -WithStatus:($issue -eq 'Conflict')
         }
 
         # Platform of the source policy (one platform per policy). Not shown
@@ -249,6 +292,11 @@ function Get-HtmlReport {
             if ($null -eq $pLabel) { $pLabel = Get-PlatformLabel $pk; $platformLabels[$pk] = $pLabel }
         }
 
+        # Key of this setting when it is in more than one source policy (the
+        # lists themselves go into the report data once, see below).
+        $srcKey = $first.Setting
+        if ($null -eq $srcKey -or $null -eq $srcAlso[$srcKey]) { $srcKey = $null }
+
         [PSCustomObject]@{
             Platform         = $pLabel
             SourcePolicyName = $first.SourcePolicyName
@@ -258,6 +306,7 @@ function Get-HtmlReport {
             Issue            = $issue
             TargetCount      = $targets.Count
             Targets          = $targets
+            SrcKey           = $srcKey
         }
     }
 
@@ -293,8 +342,15 @@ function Get-HtmlReport {
 
     # ── Build JSON data array for JS ─────────────────────────────────────────
     # One ConvertTo-Json for the whole array (much faster than one per row).
+    # Source policies of a setting that is in several (srcAlso): the list of
+    # their names goes on the first row of that setting as "srcs",
+    # the other rows of it only get "sref" = the index of that row. A list
+    # per row made the report ~70% larger on a set of overlapping baselines.
+    # Report.js leaves the row's own policy out (policyCell).
+    $srcFirst = @{}   # setting key -> index of the row that holds its list
+    $rowIndex = 0
     $jsonRows = @(foreach ($s in $settings) {
-        [ordered]@{
+        $o = [ordered]@{
             platform = $s.Platform
             policy   = $s.SourcePolicyName
             setting  = $s.Setting
@@ -304,6 +360,20 @@ function Get-HtmlReport {
             tcount   = $s.TargetCount
             targets  = $s.Targets
         }
+        # Only when the setting is in other source policies too (Extra rows
+        # have no source policy, so never).
+        $k = if ($s.PSObject.Properties['SrcKey']) { $s.SrcKey } else { $null }
+        if ($k) {
+            $at = $srcFirst[$k]
+            if ($null -eq $at) {
+                $srcFirst[$k] = $rowIndex
+                $o.srcs = @(foreach ($p in $srcAlso[$k]) { [string]$p.SourcePolicyName })
+            } else {
+                $o.sref = $at
+            }
+        }
+        $rowIndex++
+        $o
     })
     $jsonData = ConvertTo-Json -InputObject $jsonRows -Compress -Depth 3
 

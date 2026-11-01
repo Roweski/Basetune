@@ -403,15 +403,20 @@ function script:Find-VisualChildCheckBox {
 # The list fills the card, so its height follows the window and the last line
 # would be cut in half. The leftover pixels (visible height modulo one row) go
 # to the list's bottom margin, so it always shows a whole number of rows. The
-# lists scroll per item, so the top line is whole as well.
+# lists scroll per item, so the top line is whole as well. The list has no
+# bottom margin of its own in the XAML: the leftover is the space to the card
+# edge, at least MinGap, so a row that fits is never lost to a fixed margin.
 function Enable-WholeLineList {
     param([System.Windows.Controls.ListBox]$List)
     if (-not $List) { return }
     # Scp: the ScrollContentPresenter, found once (the template does not
-    # change). LastH / LastPitch: the heights of the last check, so a layout
-    # pass that changed nothing returns at once. LayoutUpdated fires after
-    # every layout pass in the window (hundreds for one maximise).
-    $state = @{ Base = $List.Margin; Extra = 0.0; Logged = $false; Scp = $null; LastH = -1.0; LastPitch = -1.0 }
+    # change). Pitch: the height of one row, measured once on a realized row
+    # (all rows are one line; the first row is not realized once the list is
+    # scrolled, so any realized row is used). LastH: the visible height of
+    # the last check, so a layout pass that changed nothing returns at once.
+    # LayoutUpdated fires after every layout pass in the window (hundreds for
+    # one maximise).
+    $state = @{ Base = $List.Margin; Extra = 0.0; Logged = $false; Scp = $null; LastH = -1.0; Pitch = 0.0; MinGap = 4 }
 
     $fit = {
         if ($List.Items.Count -eq 0) { return }
@@ -433,17 +438,27 @@ function Enable-WholeLineList {
             if (-not $scp) { return }
             $state.Scp = $scp
         }
-        $first = $List.ItemContainerGenerator.ContainerFromIndex(0)
-        if (-not $first -or $first.ActualHeight -le 0) { return }
-        $pitch = $first.ActualHeight + $first.Margin.Top + $first.Margin.Bottom
-        if ($pitch -le 0) { return }
+        if ($state.Pitch -le 0) {
+            for ($i = 0; $i -lt $List.Items.Count; $i++) {
+                $row = $List.ItemContainerGenerator.ContainerFromIndex($i)
+                if ($row -and $row.ActualHeight -gt 0) {
+                    $state.Pitch = $row.ActualHeight + $row.Margin.Top + $row.Margin.Bottom
+                    break
+                }
+            }
+            if ($state.Pitch -le 0) { return }
+        }
+        $pitch = $state.Pitch
         # Nothing changed since the last check: done.
         $h = $scp.ActualHeight
-        if ($h -eq $state.LastH -and $pitch -eq $state.LastPitch) { return }
-        $state.LastH = $h; $state.LastPitch = $pitch
+        if ($h -eq $state.LastH) { return }
+        $state.LastH = $h
 
-        $total = $scp.ActualHeight + $state.Extra          # visible height without our extra margin
-        $extra = $total - ([math]::Floor($total / $pitch) * $pitch)
+        # Visible height without our extra margin; as many whole rows as fit
+        # with at least MinGap left under the last one; the rest is margin.
+        $total = $scp.ActualHeight + $state.Extra
+        $rows  = [math]::Max(1, [math]::Floor(($total - $state.MinGap) / $pitch))
+        $extra = [math]::Max(0, $total - $rows * $pitch)
         if ([math]::Abs($extra - $state.Extra) -gt 0.5) {
             $state.Extra = $extra
             $b = $state.Base
@@ -519,6 +534,7 @@ function Enable-PolicyListKeys {
 # from BasetuneUI.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-PolicyListEvents {
+
     # Checkbox routed events → Update-Counts. Not during Set-VisibleSelection
     # (it updates once afterwards), not for the select-all boxes (set by
     # Update-SelectionRow, clicks go through Set-VisibleSelection). Queued,

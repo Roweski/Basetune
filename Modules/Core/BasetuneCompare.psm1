@@ -321,7 +321,7 @@ function Format-ReadSettingsLine {
 #   3. Compare (Compare-RawSettings + Add-IssueColumn)
 #   4. Resolve setting names + values (Resolve-DiffSettings + Merge-EnabledWithChildren)
 #      — skipped when no definition lookup is available
-#   5. Export Diff.csv, Summary.csv, Report.html to $ExportPath
+#   5. Export Diff.csv, Summary.csv, Report.html (not with -NoHtml) to $ExportPath
 #   6. Flush the category cache if new categories were fetched from the API
 #
 # Input:
@@ -334,8 +334,10 @@ function Format-ReadSettingsLine {
 #   CategoriesFilePath — where the category cache is flushed to (optional)
 #   Connection         — Graph connection for on-demand category lookups (optional)
 #   SourceLabel / TargetLabel — shown in the HTML header
+#   NoHtml             — only the CSV files and Compare.log (CLI -NoHtml)
 #
 # Output: [PSCustomObject]@{ Success; RowCount; ReportFile }
+#   ReportFile = $null with -NoHtml.
 #   Success = $false when there is nothing to compare (no source policies).
 #   Exceptions from the pipeline itself are NOT swallowed — the caller logs them.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -373,7 +375,11 @@ function Invoke-BaselineCompare {
 
         # $true: the closing "could not be resolved" line also says to
         # download the definitions (caller decides, see Test-DefinitionsRecent).
-        [bool]$SuggestDownload = $true
+        [bool]$SuggestDownload = $true,
+
+        # Skip Report.html: CSV files and Compare.log only (CLI -NoHtml, e.g.
+        # a scheduled run that only reads Diff.csv).
+        [switch]$NoHtml
     )
 
     $SourcePolicies = @($SourcePolicies | Where-Object { $_ })
@@ -580,9 +586,12 @@ function Invoke-BaselineCompare {
             Export-Csv $summaryCsv -NoTypeInformation -Encoding utf8BOM -Delimiter $csvSep -ErrorAction Stop
         Write-Log "Report" "Saved $summaryCsv"
 
-        $htmlOutputPath = if ($ReportFile) { $ReportFile } else { Join-Path $ExportPath 'Report.html' }
-        Write-Log "Report" "Exporting HTML report..." "INFO"
-        $reportSettings = Get-HtmlReport -Rows $resolved -OutputPath $htmlOutputPath -SourceLabel $SourceLabel -TargetLabel $TargetLabel -Theme $ReportTheme
+        $htmlOutputPath = $null
+        if (-not $NoHtml) {
+            $htmlOutputPath = if ($ReportFile) { $ReportFile } else { Join-Path $ExportPath 'Report.html' }
+            Write-Log "Report" "Exporting HTML report..." "INFO"
+            $reportSettings = Get-HtmlReport -Rows $resolved -OutputPath $htmlOutputPath -SourceLabel $SourceLabel -TargetLabel $TargetLabel -Theme $ReportTheme
+        }
     } catch {
         Write-Log "Compare" "Could not write the comparison data. See Basetune.log for details" "ERROR"
         Write-Log "Compare" "Details: $($_.Exception.Message)" "ERROR" -FileOnly
@@ -631,7 +640,7 @@ function Invoke-BaselineCompare {
                 if ($b.Count -eq 0) { , @(); continue }
                 , @(@("WARNING: $($b[0])") + @($b | Select-Object -Skip 1))
             }
-            , @("Saved Diff.csv ($($resolved.Count) rows)", "Saved Report.html ($reportSettings settings)")
+            , @(@("Saved Diff.csv ($($resolved.Count) rows)") + @(if (-not $NoHtml) { "Saved Report.html ($reportSettings settings)" }))
         )
         # An empty line between the blocks that have lines.
         $lines = [System.Collections.Generic.List[string]]::new()

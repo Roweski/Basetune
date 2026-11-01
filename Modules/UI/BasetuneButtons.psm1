@@ -51,7 +51,7 @@ function script:New-ButtonStyle {
   <Setter Property="Background" Value="$Bg"/>
   <Setter Property="Foreground" Value="White"/>
   <Setter Property="FocusVisualStyle" Value="{DynamicResource PrimaryFocusVisual}"/>
-  <Setter Property="FontSize"   Value="13"/>
+  <Setter Property="FontSize"   Value="14"/>
   <Setter Property="FontWeight" Value="SemiBold"/>
   <Setter Property="Height"     Value="32"/>
   <Setter Property="BorderThickness" Value="0"/>
@@ -59,17 +59,21 @@ function script:New-ButtonStyle {
   <Setter Property="Template">
     <Setter.Value>
       <ControlTemplate TargetType="Button">
-        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="8"
-                BorderThickness="1" BorderBrush="{TemplateBinding Background}"
-                Padding="{TemplateBinding Padding}">
-          <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-        </Border>
+        <!-- Fill and border as two layers, as PrimaryBtn (BasetuneTheme.xaml):
+             no lighter ring in the corners at 125/150% scaling. -->
+        <Grid>
+          <Border x:Name="fill" Background="{TemplateBinding Background}" CornerRadius="8"/>
+          <Border x:Name="bd" CornerRadius="8" BorderThickness="1" BorderBrush="Transparent"
+                  Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+        </Grid>
         <ControlTemplate.Triggers>
           <Trigger Property="IsMouseOver" Value="True">
             <Setter Property="Background" Value="$BgHover"/>
           </Trigger>
           <Trigger Property="IsEnabled" Value="False">
-            <Setter TargetName="bd" Property="Background" Value="$BgDisabled"/>
+            <Setter TargetName="fill" Property="Background" Value="$BgDisabled"/>
             <Setter TargetName="bd" Property="BorderBrush" Value="$BorderDisabled"/>
             <Setter Property="Foreground" Value="$FgDisabled"/>
           </Trigger>
@@ -230,12 +234,15 @@ function script:New-FilledIconButtonStyle {
   <Setter Property="Template">
     <Setter.Value>
       <ControlTemplate TargetType="Button">
-        <Border Background="{TemplateBinding Background}"
-                BorderBrush="{TemplateBinding BorderBrush}"
-                BorderThickness="{TemplateBinding BorderThickness}"
-                CornerRadius="8" Padding="{TemplateBinding Padding}">
-          <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-        </Border>
+        <!-- Fill and border as two layers (see New-ButtonStyle). -->
+        <Grid>
+          <Border Background="{TemplateBinding Background}" CornerRadius="8"/>
+          <Border BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="8" Padding="{TemplateBinding Padding}">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+        </Grid>
         <ControlTemplate.Triggers>
           <Trigger Property="IsMouseOver" Value="True">
             <Setter Property="Background"  Value="{DynamicResource $BgHover}"/>

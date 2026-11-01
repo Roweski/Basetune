@@ -111,14 +111,25 @@ function Update-BasetuneMaximizedState {
 # Policy names and the selected tenant are cut off with "..." in a narrow
 # window. When the text fits, the tooltip is cancelled just before it opens
 # (one text measurement at that moment, nothing in the background).
+# The width the text needs is measured by a TextBlock of its own with the
+# same text and font, in the same text formatting mode: the UI draws in
+# Display mode, where a TextBlock needs about 10px more than a FormattedText
+# measures (332 against 322 for a 50-character name), so FormattedText
+# missed names that are only just cut off. Within 1px it counts as cut off:
+# a tooltip too many is better than a missing one.
 function Test-BasetuneTextTrimmed {
     param([System.Windows.Controls.TextBlock]$Tb)
     if (-not $Tb -or -not $Tb.Text -or $Tb.ActualWidth -le 0) { return $false }
-    $tf = [System.Windows.Media.Typeface]::new($Tb.FontFamily, $Tb.FontStyle, $Tb.FontWeight, $Tb.FontStretch)
-    $ft = [System.Windows.Media.FormattedText]::new($Tb.Text, [System.Globalization.CultureInfo]::CurrentCulture,
-            $Tb.FlowDirection, $tf, $Tb.FontSize, $Tb.Foreground,
-            [System.Windows.Media.VisualTreeHelper]::GetDpi($Tb).PixelsPerDip)
-    return ($ft.WidthIncludingTrailingWhitespace -gt ($Tb.ActualWidth + 0.5))
+    $probe = [System.Windows.Controls.TextBlock]::new()
+    $probe.Text        = $Tb.Text
+    $probe.FontFamily  = $Tb.FontFamily
+    $probe.FontSize    = $Tb.FontSize
+    $probe.FontStyle   = $Tb.FontStyle
+    $probe.FontWeight  = $Tb.FontWeight
+    $probe.FontStretch = $Tb.FontStretch
+    [System.Windows.Media.TextOptions]::SetTextFormattingMode($probe, [System.Windows.Media.TextOptions]::GetTextFormattingMode($Tb))
+    $probe.Measure([System.Windows.Size]::new([double]::PositiveInfinity, [double]::PositiveInfinity))
+    return ($probe.DesiredSize.Width -gt ($Tb.ActualWidth - 1))
 }
 
 # Rotate the chevron (down = expanded, up = collapsed) in 0.4 s, from the
@@ -175,13 +186,18 @@ function Initialize-BasetuneWindow {
     })
 
     try {
-        # Policy names: TextBlock with TextTrimming and its own tooltip.
+        # Policy names: TextBlock with TextTrimming and its own tooltip. The
+        # lists recycle their rows, so the tooltip text is set from the
+        # current Text when it opens (a recycled row could show the name it
+        # had before).
         [System.Windows.EventManager]::RegisterClassHandler([System.Windows.Controls.TextBlock],
             [System.Windows.FrameworkElement]::ToolTipOpeningEvent,
             [System.Windows.Controls.ToolTipEventHandler]{
                 param($sender, $e)
                 try {
-                    if ($sender.TextTrimming -ne 'None' -and -not (Test-BasetuneTextTrimmed $sender)) { $e.Handled = $true }
+                    if ($sender.TextTrimming -eq 'None') { return }
+                    if (Test-BasetuneTextTrimmed $sender) { $sender.ToolTip = $sender.Text }
+                    else { $e.Handled = $true }
                 } catch {}
             })
         # Tenant dropdowns: check the text of the selected item in the template.

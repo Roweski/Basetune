@@ -56,7 +56,7 @@
             <StackPanel>
                 <!-- Log (console) card: light grey in light mode, dark terminal in dark mode. -->
                 <Border Background="{DynamicResource ConsoleBgBrush}" BorderBrush="{DynamicResource CardBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Margin="0">
+                        BorderThickness="1" CornerRadius="8" Margin="0">
                     <!-- No DropShadowEffect (same as the Card style): an Effect
                          turns ClearType off for the log text. -->
                     <!-- The icon buttons (Download / Tenant Configuration / Options)
@@ -110,7 +110,7 @@
                         </Path>
                     </Button>
                     <!-- Busy bar ON the card's bottom border line, between the
-                         rounded corners (CornerRadius 12). Bottom margin -1 moves
+                         rounded corners (CornerRadius 8). Bottom margin -1 moves
                          it over the 1px border; nothing moves when it appears. -->
                     <ProgressBar x:Name="progressBar" Style="{StaticResource BusyBar}"
                                  IsIndeterminate="False" Value="0"
@@ -147,12 +147,16 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- Source tenant card -->
-                <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0" Padding="10">
+                <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0" Padding="10,10,10,15">
                     <DockPanel>
                     <!-- Card title, left, lined up with the text in the tenant dropdown
-                         (ComboBox padding 10 + border 1). -->
+                         (ComboBox padding 10 + border 1); 6 below it, the same gap
+                         as a form label (FL) above its input in the dialogs. Card
+                         padding 15 at the bottom: the label line box adds about 5
+                         above its capitals, so the visible gap is about 15 at the
+                         top and at the bottom. -->
                     <TextBlock DockPanel.Dock="Top" Text="SOURCE TENANT" Style="{StaticResource SectionLabel}"
-                               HorizontalAlignment="Left" Margin="11,0,0,10"/>
+                               HorizontalAlignment="Left" Margin="11,0,0,6"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>  <ColumnDefinition Width="12"/>
@@ -188,8 +192,6 @@
                                 <TextBlock x:Name="txtSourceFilterHint" Text="Filter by name" Margin="9,0,0,0">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock" BasedOn="{StaticResource HintText}">
-                                            <!-- Same colour as the tenant dropdown text. -->
-                                            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsEnabled, ElementName=txtSourceFilter}" Value="False">
                                                     <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
@@ -261,12 +263,16 @@
                 </Border>
 
                 <!-- Target tenant card -->
-                <Border Grid.Column="2" Style="{StaticResource Card}" Margin="0" Padding="10">
+                <Border Grid.Column="2" Style="{StaticResource Card}" Margin="0" Padding="10,10,10,15">
                     <DockPanel>
                     <!-- Card title, left, lined up with the text in the tenant dropdown
-                         (ComboBox padding 10 + border 1). -->
+                         (ComboBox padding 10 + border 1); 6 below it, the same gap
+                         as a form label (FL) above its input in the dialogs. Card
+                         padding 15 at the bottom: the label line box adds about 5
+                         above its capitals, so the visible gap is about 15 at the
+                         top and at the bottom. -->
                     <TextBlock DockPanel.Dock="Top" Text="TARGET TENANT" Style="{StaticResource SectionLabel}"
-                               HorizontalAlignment="Left" Margin="11,0,0,10"/>
+                               HorizontalAlignment="Left" Margin="11,0,0,6"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>  <ColumnDefinition Width="12"/>
@@ -302,8 +308,6 @@
                                 <TextBlock x:Name="txtTargetFilterHint" Text="Filter by name" Margin="9,0,0,0">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock" BasedOn="{StaticResource HintText}">
-                                            <!-- Same colour as the tenant dropdown text. -->
-                                            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsEnabled, ElementName=txtTargetFilter}" Value="False">
                                                     <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
@@ -408,7 +412,7 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right">
                                         <!-- The same down triangle as a sorted column header (Update-ListSortHeaders). -->
-                                        <TextBlock x:Name="icoSourceFilter" Text="&#x25BC;" FontSize="12" FontWeight="Bold"
+                                        <TextBlock x:Name="icoSourceFilter" Text="&#x25BC;" FontSize="12" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center"
                                                    Margin="0,0,5,0" Visibility="Collapsed" ToolTip="Search filter active: counts the search results"/>
                                         <TextBlock x:Name="lblSourceCountOn" FontSize="12" FontWeight="SemiBold"
@@ -453,7 +457,7 @@
                                 </Border>
                             </StackPanel>
                             <ListBox x:Name="lstSource" Padding="0" TabIndex="10" BorderThickness="0" Background="Transparent"
-                                     Margin="8,0,8,8" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     Margin="8,0,8,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.VirtualizationMode="Recycling"
                                      VirtualizingPanel.ScrollUnit="Item"
@@ -476,7 +480,7 @@
                                              the first "_" in its text as an access key and
                                              hides it (GPO_MOORE_x was shown as GPOMOORE_x). -->
                                         <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
-                                                  Padding="8,1" FontSize="13" VerticalContentAlignment="Center">
+                                                  Padding="8,1" FontSize="14" VerticalContentAlignment="Center">
                                             <!-- Right: type, then platform (Windows, macOS, iOS, ...). -->
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
@@ -519,7 +523,7 @@
                         <!-- Card message; cut off with "..." in a small window, the full text
                              is the tooltip (none while empty). Only the text itself takes
                              the mouse, so the list underneath keeps working. -->
-                        <TextBlock x:Name="lblSourceNoMatch" FontSize="13" Foreground="{DynamicResource MutedBrush}"
+                        <TextBlock x:Name="lblSourceNoMatch" FontSize="14" Foreground="{DynamicResource MutedBrush}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16,0,16,0"
                                    TextTrimming="CharacterEllipsis">
                             <TextBlock.Style>
@@ -569,7 +573,7 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Right">
                                         <!-- The same down triangle as a sorted column header (Update-ListSortHeaders). -->
-                                        <TextBlock x:Name="icoTargetFilter" Text="&#x25BC;" FontSize="12" FontWeight="Bold"
+                                        <TextBlock x:Name="icoTargetFilter" Text="&#x25BC;" FontSize="12" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center"
                                                    Margin="0,0,5,0" Visibility="Collapsed" ToolTip="Search filter active: counts the search results"/>
                                         <TextBlock x:Name="lblTargetCountOn" FontSize="12" FontWeight="SemiBold"
@@ -614,7 +618,7 @@
                                 </Border>
                             </StackPanel>
                             <ListBox x:Name="lstTarget" Padding="0" TabIndex="12" BorderThickness="0" Background="Transparent"
-                                     Margin="8,0,8,8" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     Margin="8,0,8,0" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.VirtualizationMode="Recycling"
                                      VirtualizingPanel.ScrollUnit="Item"
@@ -637,7 +641,7 @@
                                              the first "_" in its text as an access key and
                                              hides it (GPO_MOORE_x was shown as GPOMOORE_x). -->
                                         <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}"
-                                                  Padding="8,1" FontSize="13" VerticalContentAlignment="Center">
+                                                  Padding="8,1" FontSize="14" VerticalContentAlignment="Center">
                                             <!-- Right: type, then platform (Windows, macOS, iOS, ...). -->
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
@@ -680,7 +684,7 @@
                         <!-- Card message; cut off with "..." in a small window, the full text
                              is the tooltip (none while empty). Only the text itself takes
                              the mouse, so the list underneath keeps working. -->
-                        <TextBlock x:Name="lblTargetNoMatch" FontSize="13" Foreground="{DynamicResource MutedBrush}"
+                        <TextBlock x:Name="lblTargetNoMatch" FontSize="14" Foreground="{DynamicResource MutedBrush}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16,0,16,0"
                                    TextTrimming="CharacterEllipsis">
                             <TextBlock.Style>

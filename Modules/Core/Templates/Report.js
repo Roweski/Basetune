@@ -31,27 +31,38 @@
         }
     })();
 
-    // Policy dropdown: the source policies of the chosen platform (all
-    // platforms: every policy). The current choice stays when it is still
-    // in the list.
+    // Policy dropdowns: the source policies (the Source Policy column) and
+    // the target policies (the detail rows) of the chosen platform (all
+    // platforms: every policy). Two policies of one side never share a
+    // name here (the duplicates carry their id). The current choice stays
+    // when it is still in the list.
+    function fillPolicyList(id, names) {
+        var sel  = document.getElementById(id);
+        var keep = sel.value;
+        names.sort(function(a,b){ return a.localeCompare(b); });
+        while (sel.options.length > 1) sel.remove(1);
+        for (var j = 0; j < names.length; j++) {
+            var o = document.createElement('option');
+            o.value = names[j]; o.textContent = names[j];
+            sel.appendChild(o);
+        }
+        sel.value = names.indexOf(keep) >= 0 ? keep : '';
+    }
     function fillPolicies() {
         var platform = document.getElementById('filterPlatform').value;
-        var sel  = document.getElementById('filterPolicy');
-        var keep = sel.value;
-        var seen = {}, opts = [];
+        var seenSrc = {}, src = [], seenTgt = {}, tgt = [];
         for (var i = 0; i < ALL_DATA.length; i++) {
             var r = ALL_DATA[i];
             if (platform && r.platform !== platform) continue;
-            if (r.policy && !seen[r.policy]) { seen[r.policy] = true; opts.push(r.policy); }
+            if (r.policy && !seenSrc[r.policy]) { seenSrc[r.policy] = true; src.push(r.policy); }
+            if (!r.targets) continue;
+            for (var k = 0; k < r.targets.length; k++) {
+                var n = r.targets[k].name;
+                if (n && !seenTgt[n]) { seenTgt[n] = true; tgt.push(n); }
+            }
         }
-        opts.sort(function(a,b){ return a.localeCompare(b); });
-        while (sel.options.length > 1) sel.remove(1);
-        for (var j = 0; j < opts.length; j++) {
-            var o = document.createElement('option');
-            o.value = opts[j]; o.textContent = opts[j];
-            sel.appendChild(o);
-        }
-        sel.value = seen[keep] ? keep : '';
+        fillPolicyList('filterPolicy', src);
+        fillPolicyList('filterTarget', tgt);
     }
     fillPolicies();
 
@@ -93,6 +104,12 @@
         Missing: '<span class="badge val-missing">Missing</span>',
         Extra:   '<span class="badge val-extra">Extra</span>'
     };
+    // Status of one target policy in a conflict row: smaller and outlined, so
+    // the setting's own status badge stays the one that stands out.
+    const targetBadge = {
+        Match: '<span class="tbadge t-match">Match</span>',
+        Diff:  '<span class="tbadge t-diff">Diff</span>'
+    };
     const issueBadge = {
         Conflict:  function(n) { return '<span class="badge val-conflict">Conflict (' + n + ')</span>'; },
         Duplicate: function(n) { return '<span class="badge val-duplicate">Duplicate (' + n + ')</span>'; },
@@ -103,10 +120,54 @@
         return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
+    // Source policy name. A setting that is also in other source policies
+    // gets a +n marker after the name: its tooltip says in how many other
+    // source policies it is and lists them (sorted by name, case-insensitive), a
+    // click shows the setting in all of them (filterBySetting). The name is
+    // cut off with ... before the marker, so the marker always shows. The
+    // names of all source policies of the setting are on one row (r.srcs),
+    // the others point to it (r.sref = its index in ALL_DATA, see
+    // Get-HtmlReport); the row's own policy is left out (names are unique
+    // per side: duplicates carry their id).
+    function policyCell(r, idx) {
+        var all = r.srcs || (r.sref !== undefined ? ALL_DATA[r.sref].srcs : null);
+        if (!all) return esc(r.policy);
+        var also = all.filter(function (n) { return n !== r.policy; })
+                      .sort(function (a, b) { return a.localeCompare(b, undefined, { sensitivity: 'base' }); });
+        if (!also.length) return esc(r.policy);
+        var tip = 'This setting is configured in ' + also.length + ' other source ' +
+                  (also.length === 1 ? 'policy' : 'policies') + '. Click to view.\n\n' + also.join('\n');
+        return '<span class="pol-wrap"><span class="pol-name">' + esc(r.policy) + '</span>' +
+               '<span class="src-more" role="button" title="' + esc(tip) + '"' +
+               ' onclick="filterBySetting(event, ' + idx + ')">+' + also.length + '</span></span>';
+    }
+
+    // Click on a +n marker: the setting of that row in every source policy.
+    // The setting name goes into the search box and, while the box still
+    // holds exactly that name, the search matches the setting exactly
+    // (exactSetting), not as part of other names. Status, issue and both
+    // policy filters are cleared, so no source policy drops out; the
+    // platform stays. stopPropagation: the click does not open the row.
+    var exactSetting = null;
+    function filterBySetting(e, idx) {
+        e.stopPropagation();
+        exactSetting = filtered[idx].setting;
+        document.getElementById('search').value       = exactSetting;
+        selStatus = '';
+        selIssue  = '';
+        document.getElementById('filterPolicy').value = '';
+        document.getElementById('filterTarget').value = '';
+        applyFilters();
+    }
+
     function renderPage() {
         const start  = (currentPage - 1) * PAGE_SIZE;
         const slice  = filtered.slice(start, start + PAGE_SIZE);
         const tbody  = document.getElementById('tableBody');
+        // With a target policy chosen the rows stay closed (as without one);
+        // opened, the detail rows mark that policy's name (dt-mark) among the
+        // other targets.
+        const target = document.getElementById('filterTarget').value;
 
         var html = '';
         for (var i = 0; i < slice.length; i++) {
@@ -116,26 +177,41 @@
 
             // Main row
             html += '<tr class="main-row" onclick="toggleDetail(' + idx + ')" id="row-' + idx + '">' +
-                '<td class="col-policy" title="' + esc(r.policy) + '">' +
+                '<td class="col-policy" data-tip="' + esc(r.policy) + '">' +
                     (hasTargets ? '<span class="expand-icon"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2.5L7.5 6L4 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>' : '<span class="expand-icon" style="opacity:0"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2.5L7.5 6L4 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>') +
-                    esc(r.policy) + '</td>' +
+                    policyCell(r, idx) + '</td>' +
                 '<td class="col-setting">' + esc(r.setting) + '</td>' +
                 '<td class="col-value">'   + esc(r.value)   + '</td>' +
                 '<td class="col-status">' + (statusBadge[r.status] || esc(r.status)) + '</td>' +
                 '<td class="col-issue">'  + (issueBadge[r.issue] ? issueBadge[r.issue](r.tcount) : esc(r.issue)) + '</td>' +
                 '</tr>';
 
-            // Detail rows (hidden by default): target policy under Policy +
-            // Setting, target value under Source Value, so they line up.
+            // Detail rows (hidden unless a target policy is chosen): target
+            // policy under Source Policy only (cut off at the same width as
+            // the source policy name; Setting stays empty), target value
+            // under Source Value, so they line up.
             var dc = 'detail-row hidden detail-' + idx;
             if (hasTargets) {
+                // Target value always under Source Value only, in every row
+                // (not across Status / Issue), so all detail rows line up.
+                // Conflict rows carry a status per target (Match / Diff against
+                // the source value, see Get-ReportTargets -WithStatus), shown
+                // under the Status column, without a heading of its own (the
+                // column header says it).
+                var ts = r.targets[0].status !== undefined;
                 html += '<tr class="' + dc + ' dt-head">' +
-                    '<td colspan="2" class="dt-policy">Target Policy</td><td colspan="3">Target Value</td></tr>';
+                    '<td class="dt-policy"><div class="dt-trunc">Target Policy</div></td><td></td><td>Target Value</td>' +
+                    '<td colspan="2"></td></tr>';
                 for (var j = 0; j < r.targets.length; j++) {
                     var t = r.targets[j];
+                    var tn = (target && t.name === target) ? '<span class="dt-mark">' + esc(t.name) + '</span>' : esc(t.name);
+                    // One line each, cut off with ... and the full text as
+                    // tooltip when cut off, as the Source Policy column
+                    // (dt-trunc, data-tip: see the mouseover handler below).
                     html += '<tr class="' + dc + ' dt-item">' +
-                        '<td colspan="2" class="dt-policy">' + esc(t.name) + '</td>' +
-                        '<td colspan="3">' + esc(t.value) + '</td></tr>';
+                        '<td class="dt-policy"><div class="dt-trunc" data-tip="' + esc(t.name) + '">' + tn + '</div></td><td></td>' +
+                        '<td><div class="dt-trunc" data-tip="' + esc(t.value) + '">' + esc(t.value) + '</div></td>' +
+                        '<td colspan="2">' + (ts ? (targetBadge[t.status] || esc(t.status)) : '') + '</td></tr>';
                 }
                 html += '<tr class="' + dc + ' dt-end"><td colspan="5"></td></tr>';
             } else {
@@ -194,62 +270,74 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
-    // A tile keeps the chosen platform; policy and search are cleared.
-    function filterByCard(status, issue) {
-        document.getElementById('filterStatus').value = status;
-        document.getElementById('filterIssue').value  = issue;
-        document.getElementById('filterPolicy').value = '';
-        document.getElementById('search').value = '';
+    // Status and issue filter: set by the tiles only (no dropdowns). One
+    // status (Match / Diff / Missing / Extra) and one issue (Duplicate /
+    // Conflict) at a time; together they combine (Diff + Conflict).
+    var selStatus = '', selIssue = '';
+
+    // Tile click. A status or issue tile sets its own part of the filter, or
+    // turns it off when it is already on; the other filters stay. Total
+    // clears status, issue, both policy filters and search (a reset); the
+    // platform stays, as the tiles count for it.
+    function toggleCard(kind, value) {
+        if (kind === 'status')     { selStatus = (selStatus === value) ? '' : value; }
+        else if (kind === 'issue') { selIssue  = (selIssue  === value) ? '' : value; }
+        else {
+            selStatus = ''; selIssue = '';
+            document.getElementById('filterPolicy').value = '';
+            document.getElementById('filterTarget').value = '';
+            document.getElementById('search').value = '';
+        }
         applyFilters();
     }
 
-    // The highlight is derived from the filter state, not set on click.
-    // Otherwise a tile would stay highlighted after choosing something else
-    // in the dropdowns or the search field.
-    //
-    // A tile is only active when the view is exactly what that tile shows:
-    // a single status or a single issue, without search text and without
-    // policy filter. The platform filter does not count: the tiles count for
-    // the chosen platform themselves. A combination highlights nothing,
-    // because no single tile covers it.
+    // The highlight follows the filter state: the chosen status tile and the
+    // chosen issue tile (both, for a combination); Total when neither is set.
+    // aria-pressed tells a screen reader which tiles are on.
     function syncCards() {
-        document.querySelectorAll('.stat-card').forEach(function(c) {
-            c.classList.remove('active');
+        var on = {
+            's-total':    !selStatus && !selIssue,
+            's-match':    selStatus === 'Match',
+            's-diff':     selStatus === 'Diff',
+            's-missing':  selStatus === 'Missing',
+            's-extra':    selStatus === 'Extra',
+            's-dup':      selIssue  === 'Duplicate',
+            's-conflict': selIssue  === 'Conflict'
+        };
+        Object.keys(on).forEach(function (cls) {
+            var el = document.querySelector('.stat-card.' + cls);
+            if (!el) return;
+            el.classList.toggle('active', on[cls]);
+            el.setAttribute('aria-pressed', on[cls] ? 'true' : 'false');
         });
-
-        var search = document.getElementById('search').value.trim();
-        var status = document.getElementById('filterStatus').value;
-        var issue  = document.getElementById('filterIssue').value;
-        var policy = document.getElementById('filterPolicy').value;
-
-        if (search || policy) { return; }
-        if (status && issue)  { return; }
-
-        var cls;
-        if (!status && !issue) {
-            cls = 's-total';
-        } else {
-            var map = { 'Match':'s-match', 'Diff':'s-diff', 'Missing':'s-missing',
-                        'Extra':'s-extra', 'Duplicate':'s-dup', 'Conflict':'s-conflict' };
-            cls = map[status || issue];
-        }
-
-        if (!cls) { return; }
-        var el = document.querySelector('.' + cls);
-        if (el) { el.classList.add('active'); }
+        // A dropdown with a choice and the search box with text are marked
+        // as an active tile (blue border), so every filter in use shows;
+        // "All ..." or an empty box: not marked.
+        ['filterPlatform', 'filterPolicy', 'filterTarget', 'search'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.classList.toggle('active', el.value.trim() !== '');
+        });
     }
 
     function applyFilters() {
         const search = document.getElementById('search').value.toLowerCase();
-        const status = document.getElementById('filterStatus').value;
-        const issue  = document.getElementById('filterIssue').value;
+        // After a +n click (filterBySetting): exact setting match while the
+        // search box still holds that name; any edit makes it a normal search.
+        const exact = exactSetting !== null && document.getElementById('search').value === exactSetting;
+        if (!exact) exactSetting = null;
+        const status = selStatus;
+        const issue  = selIssue;
         const policy = document.getElementById('filterPolicy').value;
+        const target = document.getElementById('filterTarget').value;
         const platform = document.getElementById('filterPlatform').value;
 
         // The search also matches the target policies of a row (the detail
         // rows), for every status: a policy name finds every row it is in,
-        // as source or as target (Extra rows have only targets). The Policy
-        // dropdown filters on the source policy only.
+        // as source or as target (Extra rows have only targets). The source
+        // policy dropdown filters on the source policy only, the target
+        // policy dropdown on the detail rows (exact name): Missing rows have
+        // no target, so they drop out. The status stays that of the setting
+        // over all its targets, not of the chosen target alone.
         function targetPolicyHit(r) {
             if (!r.targets) return false;
             for (var k = 0; k < r.targets.length; k++) {
@@ -257,15 +345,24 @@
             }
             return false;
         }
+        function hasTarget(r) {
+            if (!r.targets) return false;
+            for (var k = 0; k < r.targets.length; k++) {
+                if (r.targets[k].name === target) return true;
+            }
+            return false;
+        }
 
         filtered = ALL_DATA.filter(function(r) {
-            return (!search || (r.policy  || '').toLowerCase().includes(search) ||
+            return (exact ? r.setting === exactSetting :
+                    (!search || (r.policy  || '').toLowerCase().includes(search) ||
                                (r.setting || '').toLowerCase().includes(search) ||
                                (r.value   || '').toLowerCase().includes(search) ||
-                               targetPolicyHit(r))
+                               targetPolicyHit(r)))
                 && (!status || r.status === status)
                 && (!issue  || r.issue  === issue)
                 && (!policy || r.policy === policy)
+                && (!target || hasTarget(r))
                 && (!platform || r.platform === platform);
         });
 
@@ -429,6 +526,12 @@
             ths[i].appendChild(h);
         });
 
+        // The table is never narrower than the columns' minimums together
+        // (730px): in a narrower window it scrolls sideways in its wrapper
+        // (.table-wrapper overflow-x) instead of squeezing Source Value to
+        // nothing (one letter per line).
+        table.style.minWidth = (MIN[0] + MIN[1] + MIN[2] + 2 * FIXED) + 'px';
+
         // Smaller window: keep the minimum widths (Setting/Policy shrink first).
         window.addEventListener('resize', function () {
             if (table.classList.contains('resized')) apply(px(0), px(1));
@@ -437,6 +540,19 @@
         // Start: default layout.
         freeze();
     })();
+
+    // Full-text tooltip only where the text is cut off with ...: an element
+    // with data-tip gets its title on hover, measured then (the width changes
+    // with the window and the column resizer). With a +n marker the name
+    // itself (.pol-name) is the part that is cut off, not the cell. The
+    // marker keeps its own tooltip (the innermost title wins).
+    document.addEventListener('mouseover', function (e) {
+        var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+        if (!el) return;
+        var box = el.querySelector('.pol-name') || el;
+        if (box.scrollWidth > box.clientWidth) el.title = el.getAttribute('data-tip');
+        else el.removeAttribute('title');
+    });
 
     // Tiles are reachable with Tab: Enter or Space filters, like a click.
     document.addEventListener('keydown', function (e) {

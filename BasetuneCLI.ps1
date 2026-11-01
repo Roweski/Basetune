@@ -24,6 +24,7 @@ function Show-BasetuneCliHelp {
     Write-Host "  -SourceFilter <text>   Filter source policies by name before loading"
     Write-Host "  -TargetFilter <text>   Filter target policies by name before loading"
     Write-Host "  -ReportPath   <path>   Override report output folder for this run"
+    Write-Host "  -NoHtml                Only Diff.csv, Summary.csv and Compare.log (no Report.html)"
     Write-Host "  -MaxThreads   <n>      Parallel threads for loading policy settings, 1-32 (default: from Options.json)"
     Write-Host "  -Platforms    <list>   Comma-separated: windows,macos,ios,android,linux (default: windows)"
     Write-Host ""
@@ -43,6 +44,7 @@ function Show-BasetuneCliHelp {
     Write-Host "EXAMPLES" -ForegroundColor Yellow
     Write-Host "  .\BasetuneCLI.ps1 -Source <id> -Target <id>"
     Write-Host "  .\BasetuneCLI.ps1 -Source <id> -SourceFilter Win-L1 -Target <id> -TargetFilter Win-L1"
+    Write-Host "  .\BasetuneCLI.ps1 -Source <id> -Target <id> -NoHtml"
     Write-Host "  .\BasetuneCLI.ps1 -Export <id> -ExportPath C:\MyExport"
     Write-Host "  .\BasetuneCLI.ps1 -Export <id> -ExportPath C:\MyExport -ExportFilter Win-L2"
     Write-Host "  .\BasetuneCLI.ps1 -Download <id>"
@@ -73,6 +75,10 @@ $cli = {
 
         [Parameter(ParameterSetName='Compare')]
         [string]$ReportPath = "",
+
+        # No Report.html, e.g. for a scheduled run that only reads Diff.csv.
+        [Parameter(ParameterSetName='Compare')]
+        [switch]$NoHtml,
 
         [Parameter(ParameterSetName='Compare')]
         [Parameter(ParameterSetName='Export')]
@@ -643,7 +649,8 @@ $cli = {
             -SourceLabel        $sourceLabel `
             -TargetLabel        $targetLabel `
             -ReportTheme        $reportTheme `
-            -SuggestDownload    (-not (Test-DefinitionsRecent -DefinitionsPath $definitionsPath))
+            -SuggestDownload    (-not (Test-DefinitionsRecent -DefinitionsPath $definitionsPath)) `
+            -NoHtml:$NoHtml
     } catch {
         Write-Log "Compare" "Compare failed. See Basetune.log for details" "ERROR"
         Write-Log "Compare" "Details: $($_.Exception.Message)" "ERROR" -FileOnly

@@ -1,13 +1,24 @@
+    /* Background, card, border, text and input colours are those of the UI
+       palette ($script:ThemePalettes in Modules\UI\BasetuneWpf.psm1: BgBrush,
+       CardBrush, CardBorderBrush, TextBrush, SubTextBrush, InputBgBrush,
+       InputBorderBrush), light and dark: change them there and here together.
+       One exception: the light input background is white here.
+       No card shadow (--card-shadow: none), as the UI: the cards stand out
+       by their border. Font sizes 14 (the rows: source policy, setting,
+       value; the filters) / 12 (headers, labels, detail rows), as the UI. The corner radii
+       are the report's own (larger than the UI's 8px, as on the Basetune site). */
     :root {
         --primary-blue: #1a6ef5;
         --primary-blue-hover: #1662d9;
         --primary-orange: #f0a340;
-        --bg-body: #f0f4f8;
-        --bg-card: white;
-        --text-main: #1a1a1a;
-        --text-sub: #666;
-        --border-color: #eef1f6;
-        --card-shadow: 0 4px 20px rgba(0,0,0,0.05);
+        --bg-body: #ebf3fb;
+        --bg-card: #ffffff;
+        --text-main: #0e1b3d;
+        --text-sub: #4a5873;
+        --border-color: #dce6f1;
+        --input-bg: #ffffff;          /* white, as the cards (the UI's InputBgBrush is #f4f7fb) */
+        --input-border: #c5d0df;
+        --card-shadow: none;
         --status-match-bg: #16a34a;   --status-match-text: #ffffff;
         --status-diff-bg: #f0a340;    --status-diff-text: #ffffff;
         --status-missing-bg: #1a6ef5; --status-missing-text: #ffffff;
@@ -22,7 +33,9 @@
         --text-main: #f0f2f5;
         --text-sub: #a0a6b1;
         --border-color: #2d323a;
-        --card-shadow: 0 4px 25px rgba(0,0,0,0.3);
+        --input-bg: #22262e;
+        --input-border: #343a44;
+        --card-shadow: none;
         --logo-bg: #23272e;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,7 +54,7 @@
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         background-color: var(--bg-body);
         color: var(--text-main);
-        padding: 40px 20px;
+        padding: 20px 20px 40px;
         display: flex; flex-direction: column; align-items: center;
         transition: background-color 0.3s, color 0.3s;
     }
@@ -59,34 +72,39 @@
     /* Follows the window width up to 2400px (4K at 150% = 2560px, 34" ultrawide = 3440px):
        wider than that, a row gets too long to read. */
     .container { max-width: 2400px; width: 100%; }
-    header { margin-bottom: 32px; padding-top: 8px; }
-    h1 { font-size: 28px; font-weight: 600; margin: 10px 0 6px; letter-spacing: -0.8px; }
-    .subtitle { font-size: 15px; color: var(--text-main); margin-bottom: 28px; }
+    /* The title starts at the top, its line centred on the theme button
+       (top 20, 42 high); room on the right so it never runs under it. */
+    header { margin-bottom: 32px; padding-right: 56px; }
+    h1 { font-size: 28px; font-weight: 600; margin: 4px 0 6px; letter-spacing: -0.8px; }
+    .subtitle { font-size: 16px; color: var(--text-main); margin-bottom: 28px; }
     .blue-text { color: var(--primary-blue); font-weight: 600; }
 
     /* Tiles and filter bar share one 7-column grid, so the filters line up
-       with the tiles: Search under Total+Match, Status under Diff, Issue
-       under Missing, Platform under Extra, Policy under Duplicate+Conflict. */
+       with the tiles, on one row: Platform under Total, Source policy under
+       Match+Diff, Target policy under Missing+Extra, Search under
+       Duplicate+Conflict. The tiles are the status and issue filter. */
     .stats-grid, .filters {
         display: grid; grid-template-columns: repeat(7, 132px); gap: 12px;
     }
-    .stats-grid { margin-bottom: 28px; }
+    /* The gap to the filters is the gap between the tiles (12). */
+    .stats-grid { margin-bottom: 12px; }
     .stat-card {
         background: var(--bg-card); border: 1px solid var(--border-color);
-        border-radius: 12px; padding: 16px 20px; min-width: 0;
+        border-radius: 8px; padding: 9px 16px; min-width: 0;
         box-shadow: var(--card-shadow); cursor: pointer;
-        transition: border-color 0.15s, box-shadow 0.15s;
+        transition: border-color 0.15s;
     }
-    .stat-card:hover { border-color: var(--primary-blue); box-shadow: 0 4px 20px rgba(26,110,245,0.12); }
-    .stat-card.active { border-color: var(--primary-blue); box-shadow: 0 4px 20px rgba(26,110,245,0.18); }
+    .stat-card:hover { border-color: var(--primary-blue); }
+    .stat-card.active { border-color: var(--primary-blue); }
     /* Keyboard (Tab): same look as hover; no focus ring after a mouse click. */
     .stat-card:focus { outline: none; }
-    .stat-card:focus-visible { border-color: var(--primary-blue); box-shadow: 0 4px 20px rgba(26,110,245,0.12); }
+    .stat-card:focus-visible { border-color: var(--primary-blue); }
     .stat-card .s-label {
-        font-size: 11px; font-weight: 600; text-transform: uppercase;
-        letter-spacing: 0.8px; color: var(--text-sub); margin-bottom: 6px;
+        font-size: 12px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.8px; color: var(--text-sub); margin-bottom: 4px;
     }
-    .stat-card .s-value { font-size: 28px; font-weight: 700; letter-spacing: -1px; line-height: 1; }
+    /* 20px semibold: the count stands out without making the tile heavy. */
+    .stat-card .s-value { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; line-height: 1; }
     .stat-card.s-total   .s-value { color: var(--text-main); }
     .stat-card.s-match   .s-value { color: #16a34a; }
     .stat-card.s-diff    .s-value { color: #f0a340; }
@@ -96,31 +114,68 @@
     .stat-card.s-conflict .s-value { color: #dc2626; }
 
     .filters { margin-bottom: 16px; align-items: center; }
-    .filters > * { width: 100%; min-width: 0; }
-    #search { grid-column: span 2; }
-    #filterPolicy { grid-column: span 2; }
-    /* Narrow window: fall back to wrapping boxes. */
-    @media (max-width: 900px) {
-        .stats-grid, .filters { display: flex; flex-wrap: wrap; }
-        .stat-card { min-width: 100px; }
-        .filters > * { width: auto; }
-        #search { width: 260px; }
+    /* One height for the text box and the dropdowns (a select and an input
+       with the same padding render a few pixels apart): 28px = the 14px text
+       with 5px above and below, plus the border. */
+    .filters > * { width: 100%; min-width: 0; height: 28px; }
+    /* Form controls do not take the page font by default (Arial in Edge and
+       Chrome, which looks larger and coarser at the same size). */
+    .filters select, .filters input { font-family: inherit; }
+    /* Search is first in the HTML (the tab order is set by tabindex), order
+       puts it after the dropdowns. */
+    #search { grid-column: span 2; order: 1; }
+    #filterPolicy, #filterTarget { grid-column: span 2; }
+    /* Narrower than the 7 tiles (about 1040px): tiles and filters wrap on
+       the same 132px columns (as many as fit, the same number for both
+       grids), so they stay as wide as each other and in line. */
+    @media (max-width: 1040px) {
+        .stats-grid, .filters { grid-template-columns: repeat(auto-fill, 132px); }
     }
+    /* Fewer than four tile columns fit (about 640px): every filter on a line
+       of its own, as wide as the tiles above (all columns), instead of a
+       dropdown and the search box half a row each. */
+    @media (max-width: 640px) {
+        #filterPlatform, #filterPolicy, #filterTarget, #search { grid-column: 1 / -1; }
+    }
+    /* Four tile columns (about 641-759px): Platform two columns wide, so the
+       filters make two full rows (Platform + Source, Target + Search). */
+    @media (min-width: 641px) and (max-width: 759px) {
+        #filterPlatform { grid-column: span 2; }
+    }
+    /* Text in the boxes and the row count start 16px from the left edge
+       (1px border + 15px padding), in line with the table headers (th:
+       1px card border + 15px padding). */
     .filters input[type=text] {
-        background: var(--bg-card); border: 1px solid var(--border-color);
+        background: var(--input-bg); border: 1px solid var(--input-border);
         border-radius: 8px; color: var(--text-main);
-        font-size: 13px; padding: 8px 14px; outline: none;
+        font-size: 14px; padding: 4px 15px; outline: none;
         transition: border-color 0.2s;
     }
     .filters input[type=text]:focus { border-color: var(--primary-blue); }
+    /* Placeholder in the dropdown text colour, so the search box reads as
+       one of the filters (opacity: Firefox dims placeholders by default). */
+    .filters input[type=text]::placeholder { color: var(--text-main); opacity: 1; }
+    /* Own arrow (appearance: none): the native one has its own inner
+       padding, so neither the text nor the arrow could be placed exactly.
+       Arrow colour = --text-sub of the theme (an SVG cannot read a CSS var).
+       Arrow 14px from the right edge; padding-right keeps long policy
+       names clear of it. */
     .filters select {
-        background: var(--bg-card); border: 1px solid var(--border-color);
+        appearance: none; -webkit-appearance: none;
+        background: var(--input-bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' fill='none' stroke='%234a5873' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center;
+        border: 1px solid var(--input-border);
         border-radius: 8px; color: var(--text-main);
-        font-size: 13px; padding: 8px 14px; outline: none; cursor: pointer;
+        font-size: 14px; padding: 4px 36px 4px 15px; outline: none; cursor: pointer;
+    }
+    body.dark-mode .filters select {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5L6 8l3.5-3.5' fill='none' stroke='%23a0a6b1' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     }
     .filters select:focus-visible { border-color: var(--primary-blue); }
-    #filterPolicy { text-overflow: ellipsis; }
-    .row-count { font-size: 12px; color: var(--text-sub); margin-bottom: 10px; }
+    /* A filter in use (a choice, search text): blue border, as an active
+       tile (syncCards in Report.js). */
+    .filters select.active, .filters input[type=text].active { border-color: var(--primary-blue); }
+    #filterPolicy, #filterTarget { text-overflow: ellipsis; }
+    .row-count { font-size: 12px; color: var(--text-sub); margin-bottom: 10px; padding-left: 16px; }
 
     .content-card {
         background: var(--bg-card); border-radius: 16px;
@@ -130,12 +185,12 @@
     /* overflow-y hidden: the table never needs its own vertical scrollbar
        (the page scrolls); without it a 1px rounding difference could show one. */
     .table-wrapper { overflow-x: auto; overflow-y: hidden; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
     th {
         text-align: left; padding: 14px 15px; color: var(--text-sub);
         background-color: var(--bg-card); border-bottom: 1px solid var(--border-color);
         font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px;
-        font-size: 11px; white-space: nowrap; cursor: pointer; user-select: none;
+        font-size: 12px; white-space: nowrap; cursor: pointer; user-select: none;
     }
     th:hover { color: var(--primary-blue); }
     th .sort-indicator { margin-left: 4px; opacity: 0.4; font-size: 10px; }
@@ -145,18 +200,33 @@
     tr:last-child td { border-bottom: none; }
     tr:hover td { background-color: rgba(26,110,245,0.02); }
 
-    .col-policy { color: var(--text-sub); font-size: 12px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+    .col-policy { color: var(--text-sub); font-size: 14px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
     .col-setting { max-width: 460px; }
-    .col-value { color: var(--text-sub); font-size: 12px; max-width: 220px; word-break: break-word; white-space: normal; }
+    /* Source policy name + "+n" marker (the setting is in other source
+       policies too, see policyCell in Report.js): the name shrinks and is cut
+       off with ..., the marker keeps its size. 19px = the expand icon. */
+    .pol-wrap { display: inline-flex; align-items: center; max-width: calc(100% - 19px); vertical-align: middle; }
+    .pol-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .src-more {
+        flex: none; margin-left: 6px; padding: 0 5px; border-radius: 999px;
+        border: 1px solid var(--input-border); color: var(--text-sub);
+        font-size: 10px; font-weight: 600; line-height: 15px; cursor: pointer;
+        transition: border-color 0.15s, color 0.15s;
+    }
+    /* Clickable (filters on the setting): blue on hover, as the tiles. */
+    .src-more:hover { border-color: var(--primary-blue); color: var(--primary-blue); }
+    .col-value { color: var(--text-sub); font-size: 14px; max-width: 220px; word-break: break-word; white-space: normal; }
 
     /* Status + Issue columns: fixed width so badges never shift the layout */
     .col-status { width: 110px; white-space: nowrap; }
     .col-issue  { width: 130px; white-space: nowrap; }
 
+    /* Same size as the per-target badge (.tbadge): the transparent border
+       takes the place of its outline. */
     .badge {
-        display: inline-block; padding: 3px 0; border-radius: 999px;
-        font-size: 11px; font-weight: 600;
-        width: 100px; text-align: center;
+        display: inline-block; padding: 0; border-radius: 999px;
+        font-size: 10px; font-weight: 600; line-height: 15px;
+        width: 78px; text-align: center; border: 1px solid transparent;
     }
     .val-match     { background: var(--status-match-bg);    color: var(--status-match-text); }
     .val-diff      { background: var(--status-diff-bg);     color: var(--status-diff-text); }
@@ -164,10 +234,19 @@
     .val-extra     { background: var(--status-extra-bg);    color: var(--status-extra-text); }
     .val-conflict  { background: var(--issue-conflict-bg);  color: var(--issue-conflict-text); }
     .val-duplicate { background: var(--issue-duplicate-bg); color: var(--issue-duplicate-text); }
+    /* Status of one target policy in a conflict row (detail rows): as wide as
+       the badge above it, so it lines up, but outlined and smaller. */
+    .tbadge {
+        display: inline-block; padding: 0; border-radius: 999px;
+        font-size: 10px; font-weight: 600; line-height: 15px;
+        width: 78px; text-align: center; border: 1px solid currentColor;
+    }
+    .t-match { color: var(--status-match-bg); }
+    .t-diff  { color: var(--status-diff-bg); }
     .none-text {
-        display: inline-block; width: 100px; text-align: center;
+        display: inline-block; width: 78px; text-align: center;
         padding: 3px 0; border-radius: 6px;
-        font-size: 11px; font-weight: 500; color: var(--text-sub);
+        font-size: 10px; font-weight: 500; color: var(--text-sub);
         opacity: 0.6;
     }
 
@@ -188,10 +267,21 @@
         word-break: break-word;
     }
     tr.detail-row.hidden { display: none; }
+    /* Target policy and target value: one line, cut off with ... (tooltip:
+       the title attribute). width 0 + min-width 100%: the text asks no width
+       of its own, so a long name never widens the columns; it fills the
+       cell and is cut at the cell's width. */
+    .dt-trunc {
+        display: block; width: 0; min-width: 100%;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
     /* Hover on one target line (policy + value): same colour as the hover
        on a main row, so the matching value is easy to follow. */
     tr.detail-row:hover td { background-color: rgba(26,110,245,0.02); }
     tr.detail-row.dt-item:hover td { background-color: rgba(26,110,245,0.04); }
+    /* The target policy chosen in the target dropdown: its name gets a faint
+       yellow marker; the value and the other targets stay as they are. */
+    .dt-mark { background-color: rgba(250,204,21,0.22); border-radius: 3px; padding: 0 4px; margin: 0 -4px; }
     tr.detail-row td.dt-policy { padding-left: 34px; }
     tr.detail-row.dt-head td {
         padding-top: 10px; padding-bottom: 4px; font-size: 10px; font-weight: 600;
@@ -232,7 +322,9 @@
 
     .pagination {
         display: flex; align-items: center; gap: 6px;
-        padding: 14px 16px; border-top: 1px solid var(--border-color);
+        /* No border-top: the last row's own bottom border is the line (a
+           border here made it a double, 2px line). */
+        padding: 14px 16px;
         flex-wrap: wrap;
     }
     .pagination button {

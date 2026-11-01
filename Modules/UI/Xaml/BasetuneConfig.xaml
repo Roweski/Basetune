@@ -37,11 +37,13 @@
         </Grid>
 
     <!-- Outer spacing as in the main window: 20 left/right, 16 under the
-         title bar and at the bottom. Card padding 15 at the top, so the first
-         field lines up with the tenant dropdown in the main window (main card:
-         padding 10 + label 16 + 10 = 36; here 15 + label 17 + 4 = 36). 18 at
-         the bottom, 12 between the field rows. The Tenant Configuration window
-         is then not higher than the main window at its minimum height (400). -->
+         title bar and at the bottom. Card padding 10 at the top and sides, as
+         the tenant cards in the main window (same label style and 6 under it),
+         so the first field lines up with the tenant dropdown there. 15 at the
+         bottom: the label line box adds about 5 above its capitals, so the
+         visible gap from the card edge to the first label is about 15, and the
+         last input gets the same gap to the bottom edge. 12 between the field
+         rows. -->
     <!-- Maximum input lengths (typing / pasting): Display Name, Tenant ID,
          Client ID and Certificate Thumbprint 64, Client Secret 128. The JSON
          path has no limit. Values already in Config.json are not cut off. -->
@@ -59,7 +61,7 @@
              (Update-TenantAuthFields), so they keep their space and the
              window does not jump when the method changes. A fixed height
              (287) cut off the last row when labels render a bit higher. -->
-                <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="20,15,20,18">
+                <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="10,10,10,15">
                     <StackPanel>
 
                         <!-- TENANTS: dropdown + new (+) + trash icon -->
@@ -72,7 +74,7 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0">
-                                <TextBlock Style="{StaticResource FL}" Text="Tenant"/>
+                                <TextBlock Style="{StaticResource FL}" Text="TENANT"/>
                                 <Grid>
                                     <ComboBox x:Name="lstTenants" Padding="11,0,0,0"/>
                                     <!-- Placeholder while no tenant is selected; text set by
@@ -119,7 +121,7 @@
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Style="{StaticResource FL}" Text="Display Name"/>
+                                        <TextBlock Style="{StaticResource FL}" Text="DISPLAY NAME"/>
                                         <TextBlock x:Name="reqDisplayName" Style="{StaticResource REQ}" Text="Required!"/>
                                     </StackPanel>
                                     <Grid>
@@ -131,7 +133,7 @@
                                     </Grid>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2">
-                                    <TextBlock Style="{StaticResource FL}" Text="Authentication Method"/>
+                                    <TextBlock Style="{StaticResource FL}" Text="AUTHENTICATION METHOD"/>
                                     <!-- Content = the text shown, Tag = the authMethod value in Config.json
                                          (Get-TenantFormAuthMethod reads the Tag). -->
                                     <ComboBox x:Name="cfgTenantAuthMethod" Padding="10,0,0,0">
@@ -154,7 +156,7 @@
                                 <Grid x:Name="pnlTenantId" Grid.Row="0" Margin="0,0,0,12" VerticalAlignment="Top">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock Style="{StaticResource FL}" Text="Tenant ID"/>
+                                            <TextBlock Style="{StaticResource FL}" Text="TENANT ID"/>
                                             <TextBlock x:Name="reqTenantId" Style="{StaticResource REQ}" Text="Required!"/>
                                         </StackPanel>
                                         <Grid>
@@ -176,7 +178,7 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" x:Name="pnlClientId">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock Style="{StaticResource FL}" Text="Client ID"/>
+                                            <TextBlock Style="{StaticResource FL}" Text="CLIENT ID"/>
                                             <TextBlock x:Name="reqClientId" Style="{StaticResource REQ}" Text="Required!"/>
                                         </StackPanel>
                                         <Grid>
@@ -189,7 +191,7 @@
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock x:Name="lblTenantSecret" Style="{StaticResource FL}" Text="Client Secret"/>
+                                            <TextBlock x:Name="lblTenantSecret" Style="{StaticResource FL}" Text="CLIENT SECRET"/>
                                             <TextBlock x:Name="reqClientSecret" Style="{StaticResource REQ}" Text="Required!"/>
                                         </StackPanel>
                                         <Grid>
@@ -229,7 +231,7 @@
                                         </Grid>
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock x:Name="lblTenantThumb" Style="{StaticResource FL}"
-                                                       Text="Certificate Thumbprint" Visibility="Collapsed"/>
+                                                       Text="CERTIFICATE THUMBPRINT" Visibility="Collapsed"/>
                                             <TextBlock x:Name="reqCertThumb" Style="{StaticResource REQ}" Text="Required!"/>
                                         </StackPanel>
                                         <!-- Grid follows the TextBox visibility (set by Update-TenantAuthFields), so the clear (x) hides with it -->
@@ -247,7 +249,7 @@
                                       Visibility="Collapsed" VerticalAlignment="Top" Margin="0,0,0,0">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal">
-                                            <TextBlock Style="{StaticResource FL}" Text="Policy Folder"/>
+                                            <TextBlock Style="{StaticResource FL}" Text="POLICY FOLDER"/>
                                             <TextBlock x:Name="reqJsonPath" Style="{StaticResource REQ}" Text="Required!"/>
                                         </StackPanel>
                                         <Grid>
@@ -279,7 +281,7 @@
                          Default empty so the bar looks clean when idle. -->
                     <TextBlock x:Name="lblConnectionStatus" Grid.Column="0"
                                VerticalAlignment="Center" Margin="4,0,8,0"
-                               FontSize="13" Text=""/>
+                               FontSize="14" Text=""/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button x:Name="btnSaveConfig" Style="{StaticResource PrimaryBtn}"
                                 Content="Save Config" MinWidth="110" Height="32" Padding="14,0" Margin="0,0,12,0"

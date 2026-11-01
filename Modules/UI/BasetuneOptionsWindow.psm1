@@ -57,7 +57,7 @@ function Open-OptionsWindow {
             $cb.Tag       = $o.Key
             $cb.IsChecked = ($o.Key -in $AppState.savedPlatforms)
             $cb.Padding   = [System.Windows.Thickness]::new(8, 0, 0, 0)
-            $cb.FontSize  = 13
+            $cb.FontSize  = 14
             $bd = [System.Windows.Controls.Border]::new()
             $bd.Background = [System.Windows.Media.Brushes]::Transparent
             $bd.Padding    = [System.Windows.Thickness]::new(8, 6, 8, 6)

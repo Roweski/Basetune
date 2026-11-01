@@ -11,11 +11,11 @@ Basetune is a PowerShell-based tool to compare Intune **Settings Catalog** and *
 
 Comparison capabilities:
 
-- **Every target policy** — Each source policy setting is compared against all selected target policies, so duplicate and conflicting settings across policies are detected.
+- **All source policies** — Compare each source policy against all selected target policies to detect duplicates and conflicts.
 - **Live comparison** — Compare policies from online tenants via Microsoft Graph.
-- **Offline comparison** — Compare policies from offline baselines using JSON exports, without an internet connection. Setting and category definitions are stored locally for future comparisons.
-- **Any combination** — Compare online tenants and offline baselines, using either as the source or target.
-- **Platform-aware** — Only policies for the selected platforms (Windows, macOS, iOS/iPadOS, Android, and Linux) are loaded and compared.
+- **Offline comparison** — Compare policies from offline baselines using JSON exports. Setting and category definitions are stored locally for future comparisons without connecting to Microsoft Graph.
+- **Any combination** — Use an online tenant or an offline baseline as either the source or target.
+- **Platform-aware** — Compare only policies for the selected platforms (Windows, macOS, iOS/iPadOS, Android, and Linux).
 
 <br>
 
@@ -83,9 +83,13 @@ Basetune also detects cross-policy issues within the target:
 
 The HTML report is a standalone file that works offline in any browser.
 
-> When a setting is found in multiple target policies, Diff takes precedence over Match. Target policies with conflicting values are reported as Diff (Issue: Conflict).
-
 ![Basetune Report](docs/Report.png)
+
+<br>
+
+> The +N badge indicates that the setting is also defined in other source policies. Hover over it to see their names or click it to show the setting in all matching source policies.
+
+> When a setting is found in multiple target policies with conflicting values, its aggregated status is Diff and its issue is Conflict. The report also shows the individual status of each target policy.
 
 <br>
 
@@ -94,19 +98,6 @@ The HTML report is a standalone file that works offline in any browser.
 Basetune includes a command-line interface for running comparisons and exports from a terminal or automation script.
 
 ![Basetune CLI](docs/CLI.png)
-
-<br>
-
-Examples:
-
-```
-.\BasetuneCLI.ps1 -TenantList
-.\BasetuneCLI.ps1 -Source 1 -Target 2
-.\BasetuneCLI.ps1 -Source 1 -SourceFilter Win -Target 2 -ReportPath D:\Reports
-.\BasetuneCLI.ps1 -Export 1 -ExportPath C:\Export
-.\BasetuneCLI.ps1 -Download 1
-.\BasetuneCLI.ps1 -Help
-```
 
 > The client secret in Config.json can only be decrypted by the Windows user who saved it. To run the CLI under another account (for example, as a scheduled task), use a separate Basetune folder for that account and enter the client secret once in Tenant Configuration while signed in as that account.
 

@@ -22,11 +22,14 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- ── Card ─────────────────────────────────────────────────────────── -->
+    <!-- Corner radius 8 = the Windows 11 window corner (DWMWCP_ROUND, set in
+         BasetuneWindow.psm1 / BasetuneWpf.psm1), as the buttons, inputs and
+         dropdown list: one rounding for the whole window. -->
     <Style x:Key="Card" TargetType="Border">
         <Setter Property="Background"      Value="{DynamicResource CardBrush}"/>
         <Setter Property="BorderBrush"     Value="{DynamicResource CardBorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="CornerRadius"    Value="12"/>
+        <Setter Property="CornerRadius"    Value="8"/>
         <Setter Property="Padding"         Value="16"/>
         <Setter Property="Margin"          Value="0,0,0,12"/>
         <!-- No DropShadowEffect: an Effect renders the whole card (and its
@@ -34,30 +37,35 @@
     </Style>
 
     <!-- ── Labels ───────────────────────────────────────────────────────── -->
-    <!-- Form label above an input (same size as the input text). Left margin
-         11 = border (1) + text inset of TextBox / PasswordBox / ComboBox, so
-         the label starts exactly above the value. -->
+    <!-- Form label above an input, in the look of SectionLabel (SOURCE TENANT):
+         12, SemiBold, Basetune blue; TextBlock has no text transform, so the
+         capitals are in the XAML text. Left margin 11 = border (1) + text inset
+         of TextBox / PasswordBox / ComboBox, so the label starts exactly above
+         the value; bottom 6 = the same gap as SOURCE / TARGET TENANT above the
+         tenant dropdown. -->
     <Style x:Key="FL" TargetType="TextBlock">
-        <Setter Property="FontSize"   Value="13"/>
-        <Setter Property="Foreground" Value="{DynamicResource SubTextBrush}"/>
-        <Setter Property="Margin"     Value="11,0,0,4"/>
+        <Setter Property="FontSize"   Value="12"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="{DynamicResource SectionLabelBrush}"/>
+        <Setter Property="Margin"     Value="11,0,0,6"/>
     </Style>
     <!-- "Required!" marker next to a form label (hidden until validation).
-         Left margin 4 = about one space at FontSize 13. -->
+         Left margin 6 = about one space after the semibold 12px label. -->
     <Style x:Key="REQ" TargetType="TextBlock">
-        <Setter Property="FontSize"   Value="13"/>
+        <Setter Property="FontSize"   Value="12"/>
         <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}"/>
-        <Setter Property="Margin"     Value="4,0,0,4"/>
+        <Setter Property="Margin"     Value="6,0,0,6"/>
         <Setter Property="Visibility" Value="Collapsed"/>
     </Style>
     <!-- Card section header: SOURCE TENANT, TARGET POLICIES, ... -->
     <Style x:Key="SectionLabel" TargetType="TextBlock">
         <Setter Property="FontSize"   Value="12"/>
-        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
         <!-- Basetune blue in light and dark mode (own key, so it can differ per theme). -->
         <Setter Property="Foreground" Value="{DynamicResource SectionLabelBrush}"/>
     </Style>
-    <!-- Placeholder text that sits behind a transparent TextBox -->
+    <!-- Placeholder text that sits behind a transparent TextBox (or in an
+         empty dropdown): 13, a little smaller than the 14 of a value. -->
     <Style x:Key="HintText" TargetType="TextBlock">
         <Setter Property="Foreground"        Value="{DynamicResource HintBrush}"/>
         <Setter Property="FontStyle"         Value="Italic"/>
@@ -91,12 +99,18 @@
         </Setter>
     </Style>
 
+    <!-- Button templates: fill and border are two layers ("fill" over the
+         whole rounded shape, "bd" only the 1px border on top). One Border
+         with Background + BorderBrush paints the fill only inside the
+         border; at 125/150% scaling the anti-aliased edges of both leave a
+         lighter ring in the corners. "bd" keeps BorderThickness 1 in every
+         state, so the content never moves. -->
     <Style x:Key="PrimaryBtn" TargetType="Button">
         <!-- Keyboard focus (Tab) looks like hover (see PrimaryFocusVisual). -->
         <Setter Property="FocusVisualStyle" Value="{StaticResource PrimaryFocusVisual}"/>
         <Setter Property="Background"      Value="{DynamicResource AccentBrush}"/>
         <Setter Property="Foreground"      Value="White"/>
-        <Setter Property="FontSize"        Value="13"/>
+        <Setter Property="FontSize"        Value="14"/>
         <Setter Property="FontWeight"      Value="SemiBold"/>
         <Setter Property="Height"          Value="34"/>
         <Setter Property="BorderThickness" Value="0"/>
@@ -104,17 +118,19 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="8"
-                            BorderThickness="1" BorderBrush="{TemplateBinding Background}"
-                            Padding="{TemplateBinding Padding}">
-                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
+                    <Grid>
+                        <Border x:Name="fill" Background="{TemplateBinding Background}" CornerRadius="8"/>
+                        <Border x:Name="bd" CornerRadius="8" BorderThickness="1" BorderBrush="Transparent"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource DisabledBgBrush}"/>
+                            <Setter TargetName="fill" Property="Background" Value="{DynamicResource DisabledBgBrush}"/>
                             <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}"/>
                             <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
                         </Trigger>
@@ -130,7 +146,7 @@
         <Setter Property="FocusVisualStyle" Value="{StaticResource AccentFocusVisual}"/>
         <Setter Property="Background"      Value="{DynamicResource SecBtnBgBrush}"/>
         <Setter Property="Foreground"      Value="{DynamicResource SecBtnFgBrush}"/>
-        <Setter Property="FontSize"        Value="13"/>
+        <Setter Property="FontSize"        Value="14"/>
         <Setter Property="Height"          Value="30"/>
         <Setter Property="BorderBrush"     Value="{DynamicResource InputBorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
@@ -138,12 +154,15 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="8" Padding="{TemplateBinding Padding}">
-                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
+                    <!-- Two layers, see the note above PrimaryBtn. -->
+                    <Grid>
+                        <Border Background="{TemplateBinding Background}" CornerRadius="8"/>
+                        <Border BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
@@ -256,7 +275,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Background="Transparent" CornerRadius="4">
+                    <Border Background="Transparent" CornerRadius="8">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
@@ -272,7 +291,7 @@
     <!-- ── TextBox ──────────────────────────────────────────────────────── -->
     <Style TargetType="TextBox">
         <Setter Property="Height"                   Value="32"/>
-        <Setter Property="FontSize"                 Value="13"/>
+        <Setter Property="FontSize"                 Value="14"/>
         <Setter Property="Foreground"               Value="{DynamicResource TextBrush}"/>
         <Setter Property="Background"               Value="{DynamicResource InputBgBrush}"/>
         <Setter Property="BorderBrush"              Value="{DynamicResource InputBorderBrush}"/>
@@ -315,7 +334,7 @@
     <!-- ── PasswordBox (same look as TextBox) ───────────────────────────── -->
     <Style TargetType="PasswordBox">
         <Setter Property="Height"                   Value="32"/>
-        <Setter Property="FontSize"                 Value="13"/>
+        <Setter Property="FontSize"                 Value="14"/>
         <Setter Property="Foreground"               Value="{DynamicResource TextBrush}"/>
         <Setter Property="Background"               Value="{DynamicResource InputBgBrush}"/>
         <Setter Property="BorderBrush"              Value="{DynamicResource InputBorderBrush}"/>
@@ -381,7 +400,7 @@
         <!-- Keyboard focus (Tab) looks like hover (see AccentFocusVisual). -->
         <Setter Property="FocusVisualStyle"           Value="{StaticResource AccentFocusVisual}"/>
         <Setter Property="Height"                     Value="32"/>
-        <Setter Property="FontSize"                   Value="13"/>
+        <Setter Property="FontSize"                   Value="14"/>
         <Setter Property="Foreground"                 Value="{DynamicResource TextBrush}"/>
         <Setter Property="Padding"                    Value="10,0,28,0"/>
         <Setter Property="VerticalContentAlignment"   Value="Center"/>
@@ -415,7 +434,7 @@
                                Focusable="False" PopupAnimation="Fade">
                             <Border Margin="0,0,8,8" Background="{DynamicResource PopupBgBrush}"
                                     BorderBrush="{DynamicResource PopupBorderBrush}" BorderThickness="1"
-                                    CornerRadius="10" Padding="4"
+                                    CornerRadius="8" Padding="4"
                                     MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}">
                                 <Border.Effect>
@@ -439,13 +458,13 @@
 
     <Style TargetType="ComboBoxItem">
         <Setter Property="Foreground"      Value="{DynamicResource TextBrush}"/>
-        <Setter Property="FontSize"        Value="13"/>
+        <Setter Property="FontSize"        Value="14"/>
         <Setter Property="Padding"         Value="8,6"/>
         <Setter Property="Cursor"          Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBoxItem">
-                    <Border x:Name="bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                    <Border x:Name="bd" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
                         <ContentPresenter/>
                     </Border>
                     <ControlTemplate.Triggers>
@@ -467,7 +486,7 @@
     </Style>
 
     <!-- ── Column header (policy lists: Policy / Platform, click = sort) ── -->
-    <!-- Same size as SectionLabel ("SOURCE TENANT"): 12, Bold, capitals; muted grey. -->
+    <!-- Same size as SectionLabel ("SOURCE TENANT"): 12, capitals; Bold, muted grey. -->
     <Style x:Key="ColumnHeaderBtn" TargetType="Button">
         <Setter Property="Foreground"                 Value="{DynamicResource MutedBrush}"/>
         <Setter Property="Background"                 Value="Transparent"/>
@@ -517,6 +536,7 @@
                              is one solid fill, without the light seam that a 1.5px border
                              on top of the same colour left at some display scalings. -->
                         <Grid Width="16" Height="16" VerticalAlignment="Center">
+                            <!-- Radius 4, not 8 like the rest: 8 on a 16px box makes it a circle (a radio button look). -->
                             <Border x:Name="box" CornerRadius="4" BorderThickness="1"
                                     Background="{DynamicResource InputBgBrush}" BorderBrush="{DynamicResource InputBorderBrush}"/>
                             <Path x:Name="tick" Data="M4.2,8.3 L6.9,11 L11.8,5.4" Stroke="White" StrokeThickness="2"
@@ -565,7 +585,7 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">
-                    <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="6,1">
+                    <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="8" Padding="6,1">
                         <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
                     </Border>
                     <ControlTemplate.Triggers>
@@ -585,12 +605,12 @@
     <!-- ── ToolTip ──────────────────────────────────────────────────────── -->
     <Style TargetType="ToolTip">
         <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-        <Setter Property="FontSize"   Value="11"/>
+        <Setter Property="FontSize"   Value="12"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ToolTip">
                     <Border Background="{DynamicResource PopupBgBrush}" BorderBrush="{DynamicResource PopupBorderBrush}"
-                            BorderThickness="1" CornerRadius="6" Padding="8,4">
+                            BorderThickness="1" CornerRadius="8" Padding="8,4">
                         <ContentPresenter/>
                     </Border>
                 </ControlTemplate>
@@ -621,7 +641,7 @@
                                         <Thumb>
                                             <Thumb.Template>
                                                 <ControlTemplate TargetType="Thumb">
-                                                    <Border CornerRadius="4" Margin="2,3" Background="{DynamicResource ScrollThumbBrush}"/>
+                                                    <Border CornerRadius="8" Margin="2,3" Background="{DynamicResource ScrollThumbBrush}"/>
                                                 </ControlTemplate>
                                             </Thumb.Template>
                                         </Thumb>
@@ -657,7 +677,7 @@
                                         <Thumb>
                                             <Thumb.Template>
                                                 <ControlTemplate TargetType="Thumb">
-                                                    <Border CornerRadius="4" Margin="3,2" Background="{DynamicResource ScrollThumbBrush}"/>
+                                                    <Border CornerRadius="8" Margin="3,2" Background="{DynamicResource ScrollThumbBrush}"/>
                                                 </ControlTemplate>
                                             </Thumb.Template>
                                         </Thumb>

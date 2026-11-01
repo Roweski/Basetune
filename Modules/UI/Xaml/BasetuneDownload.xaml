@@ -37,11 +37,13 @@
         </Grid>
 
     <!-- Outer spacing as in the main window: 20 left/right, 16 under the
-         title bar and at the bottom. Card padding 15 at the top, so the first
-         field lines up with the tenant dropdown in the main window (main card:
-         padding 10 + label 16 + 10 = 36; here 15 + label 17 + 4 = 36). 18 at
-         the bottom, 12 between the field rows. The Tenant Configuration window
-         is then not higher than the main window at its minimum height (400). -->
+         title bar and at the bottom. Card padding 10 at the top and sides, as
+         the tenant cards in the main window (same label style and 6 under it),
+         so the first field lines up with the tenant dropdown there. 15 at the
+         bottom: the label line box adds about 5 above its capitals, so the
+         visible gap from the card edge to the first label is about 15, and the
+         last input gets the same gap to the bottom edge. 12 between the field
+         rows. -->
     <Grid Margin="20,16,20,16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -49,10 +51,10 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="20,15,20,18">
+        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="10,10,10,15">
             <StackPanel>
                 <!-- Label above the dropdown, same style as the Options window (FL). -->
-                <TextBlock Style="{StaticResource FL}" Text="Online Tenant"/>
+                <TextBlock Style="{StaticResource FL}" Text="ONLINE TENANT"/>
                 <Grid>
                     <ComboBox x:Name="cmbDownloadTenant"/>
                     <!-- Placeholder until a tenant is picked (Download stays disabled until then) -->
@@ -73,17 +75,17 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Grid.Column="0" FontSize="13" Margin="0,0,12,2"
+                    <TextBlock Grid.Row="0" Grid.Column="0" FontSize="14" Margin="0,0,12,2"
                                Foreground="{DynamicResource SubTextBrush}" Text="Current settings:"/>
-                    <TextBlock Grid.Row="0" Grid.Column="1" FontSize="13" Margin="0,0,0,2"
+                    <TextBlock Grid.Row="0" Grid.Column="1" FontSize="14" Margin="0,0,0,2"
                                x:Name="txtDlgDefCount" Text="-"/>
-                    <TextBlock Grid.Row="1" Grid.Column="0" FontSize="13" Margin="0,0,12,2"
+                    <TextBlock Grid.Row="1" Grid.Column="0" FontSize="14" Margin="0,0,12,2"
                                Foreground="{DynamicResource SubTextBrush}" Text="Current categories:"/>
-                    <TextBlock Grid.Row="1" Grid.Column="1" FontSize="13" Margin="0,0,0,2"
+                    <TextBlock Grid.Row="1" Grid.Column="1" FontSize="14" Margin="0,0,0,2"
                                x:Name="txtDlgCatCount" Text="-"/>
-                    <TextBlock Grid.Row="2" Grid.Column="0" FontSize="13" Margin="0,0,12,0"
+                    <TextBlock Grid.Row="2" Grid.Column="0" FontSize="14" Margin="0,0,12,0"
                                Foreground="{DynamicResource SubTextBrush}" Text="Last updated:"/>
-                    <TextBlock Grid.Row="2" Grid.Column="1" FontSize="13"
+                    <TextBlock Grid.Row="2" Grid.Column="1" FontSize="14"
                                x:Name="txtDlgLastUpdated" Text="Missing"/>
                 </Grid>
             </StackPanel>
