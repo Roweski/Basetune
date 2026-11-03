@@ -409,14 +409,13 @@ function script:Find-VisualChildCheckBox {
 function Enable-WholeLineList {
     param([System.Windows.Controls.ListBox]$List)
     if (-not $List) { return }
-    # Scp: the ScrollContentPresenter, found once (the template does not
-    # change). Pitch: the height of one row, measured once on a realized row
-    # (all rows are one line; the first row is not realized once the list is
-    # scrolled, so any realized row is used). LastH: the visible height of
-    # the last check, so a layout pass that changed nothing returns at once.
-    # LayoutUpdated fires after every layout pass in the window (hundreds for
-    # one maximise).
-    $state = @{ Base = $List.Margin; Extra = 0.0; Logged = $false; Scp = $null; LastH = -1.0; Pitch = 0.0; MinGap = 4 }
+    # Scp: the ScrollContentPresenter and Panel: the items panel, both found
+    # once (the template does not change). Pitch: the row pitch (all rows are
+    # one line), measured on every height change (see below). LastH: the
+    # height to fill (visible + extra margin) of the last check, so a layout
+    # pass that changed nothing returns at once. LayoutUpdated fires after every layout pass in the
+    # window (hundreds for one maximise).
+    $state = @{ Base = $List.Margin; Extra = 0.0; Logged = $false; Scp = $null; Panel = $null; LastH = -1.0; Pitch = 0.0; MinGap = 4 }
 
     $fit = {
         if ($List.Items.Count -eq 0) { return }
@@ -438,25 +437,49 @@ function Enable-WholeLineList {
             if (-not $scp) { return }
             $state.Scp = $scp
         }
-        if ($state.Pitch -le 0) {
-            for ($i = 0; $i -lt $List.Items.Count; $i++) {
-                $row = $List.ItemContainerGenerator.ContainerFromIndex($i)
-                if ($row -and $row.ActualHeight -gt 0) {
-                    $state.Pitch = $row.ActualHeight + $row.Margin.Top + $row.Margin.Bottom
-                    break
-                }
-            }
-            if ($state.Pitch -le 0) { return }
-        }
-        $pitch = $state.Pitch
-        # Nothing changed since the last check: done.
-        $h = $scp.ActualHeight
-        if ($h -eq $state.LastH) { return }
-        $state.LastH = $h
-
-        # Visible height without our extra margin; as many whole rows as fit
-        # with at least MinGap left under the last one; the rest is margin.
+        # The height the list has to fill: the visible height plus our own
+        # extra margin, so it stays the same when only that margin changed.
+        # Less than 1px off the last check (layout rounding of our own margin
+        # change): done. Without this the pitch was measured again after each
+        # margin change, the realized rows (and so the average) changed with
+        # it, the row count flipped and the scrollbar flickered.
         $total = $scp.ActualHeight + $state.Extra
+        if ([math]::Abs($total - $state.LastH) -lt 1 -and $state.Pitch -gt 0) { return }
+        $state.LastH = $total
+
+        # Row pitch, measured again on every height change: the distance from
+        # the first to the last realized row divided by the rows in between.
+        # One row's ActualHeight is not enough: with layout rounding at 125/150%
+        # scaling the rows are placed a fraction apart from it, and over the
+        # 40+ rows of a maximised (ultrawide) window that adds up to more than
+        # the gap, so the last row was cut. Measuring again also follows a
+        # move to a screen with another scaling.
+        # The rows are the children of the items panel (the realized rows, in
+        # order), found once under the ScrollContentPresenter.
+        if (-not $state.Panel) {
+            $queue = [System.Collections.Generic.Queue[System.Windows.DependencyObject]]::new()
+            $queue.Enqueue($scp)
+            while ($queue.Count -gt 0 -and -not $state.Panel) {
+                $el = $queue.Dequeue()
+                if ($el -is [System.Windows.Controls.Panel] -and $el.IsItemsHost) { $state.Panel = $el; break }
+                $n = [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($el)
+                for ($i = 0; $i -lt $n; $i++) { $queue.Enqueue([System.Windows.Media.VisualTreeHelper]::GetChild($el, $i)) }
+            }
+        }
+        $rows = @()
+        if ($state.Panel) { $rows = @($state.Panel.Children | Where-Object { $_.ActualHeight -gt 0 }) }
+        if ($rows.Count -ge 2) {
+            $dy = $rows[-1].TranslatePoint([System.Windows.Point]::new(0, 0), $rows[0]).Y
+            if ($dy -gt 0) { $state.Pitch = $dy / ($rows.Count - 1) }
+        } elseif ($state.Pitch -le 0 -and $rows.Count -eq 1) {
+            $r1 = $rows[0]
+            $state.Pitch = $r1.ActualHeight + $r1.Margin.Top + $r1.Margin.Bottom
+        }
+        if ($state.Pitch -le 0) { $state.LastH = -1.0; return }
+        $pitch = $state.Pitch
+
+        # As many whole rows as fit in $total with at least MinGap left under
+        # the last one; the rest is margin.
         $rows  = [math]::Max(1, [math]::Floor(($total - $state.MinGap) / $pitch))
         $extra = [math]::Max(0, $total - $rows * $pitch)
         if ([math]::Abs($extra - $state.Extra) -gt 0.5) {

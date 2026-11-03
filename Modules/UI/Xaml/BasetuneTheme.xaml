@@ -574,11 +574,19 @@
     </Style>
 
     <!-- ── ListBox items (policy lists) ─────────────────────────────────── -->
-    <!-- No selection highlight: the checkbox is the state. Hover + keyboard-focus row only. -->
+    <!-- No selection highlight: the checkbox is the state. Hover + keyboard-focus row only.
+         Width = the list's visible width (left-aligned): the
+         VirtualizingStackPanel can arrange its rows at an older, wider width
+         after a fast (diagonal) resize, which pushed Type and Platform out of
+         view instead of under their headers. Bound to the ScrollViewer's
+         ViewportWidth, every row is exactly as wide as what shows. -->
     <Style TargetType="ListBoxItem">
         <Setter Property="Padding"                    Value="0"/>
         <Setter Property="Margin"                     Value="0,0,0,1"/>
         <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalAlignment"        Value="Left"/>
+        <Setter Property="Width"
+                Value="{Binding ViewportWidth, RelativeSource={RelativeSource AncestorType=ScrollViewer}}"/>
         <Setter Property="Background"                 Value="Transparent"/>
         <Setter Property="BorderThickness"            Value="0"/>
         <Setter Property="FocusVisualStyle"           Value="{x:Null}"/>
