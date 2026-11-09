@@ -60,7 +60,7 @@ Click the layers icon at the bottom left to open Baseline Configuration. Each ba
 
 Intune policies contain raw IDs instead of readable names. Basetune resolves them using lightweight definition files that contain only the properties it needs, keeping them fast to load.
 
-> Basetune includes `Definitions\settings.default.json` and `Definitions\categories.default.json`, which may become outdated over time. Click the Download button in the UI to create or refresh `Definitions\settings.json` and `Definitions\categories.json` for future comparisons (requires an online tenant).
+> Basetune includes `Definitions\settings.default.json` and `Definitions\categories.default.json`, which may become outdated over time. Click the Definitions button in the UI to create or refresh `Definitions\settings.json` and `Definitions\categories.json` for future comparisons (requires an online tenant).
 
 A setting without a definition is still compared but shown with its raw ID. Missing categories are retrieved from Microsoft Graph during a comparison if an online tenant is selected. All categories are then saved to `Definitions\categories.json`.
 
@@ -166,7 +166,7 @@ Basetune uses the **OAuth 2.0 client credentials flow** with either a **client s
 - **Client secret** — Stored encrypted with Windows DPAPI (CurrentUser scope) in `Config\Config.json`. Only the same Windows user on the same machine can decrypt it.
 - **Certificate** — Only the certificate thumbprint is stored in `Config\Config.json`. The certificate, including its private key, must be in `Cert:\CurrentUser\My` or `Cert:\LocalMachine\My`.
 
-When loading `Config\Config.json`, Basetune encrypts any plaintext client secrets using DPAPI and saves the updated configuration. Secrets are decrypted only when needed, either for a token request or to display the secret in Tenant Configuration, and Basetune never writes them to disk in plaintext. Access tokens are stored in memory only and are requested again when needed, never renewed in the background.
+When loading `Config\Config.json`, Basetune encrypts any plaintext client secrets using DPAPI and saves the updated configuration. Secrets are decrypted only when needed, either for a token request or to display the secret in Baseline Configuration, and Basetune never writes them to disk in plaintext. Access tokens are stored in memory only and are requested again when needed, never renewed in the background.
 
 <br>
 
