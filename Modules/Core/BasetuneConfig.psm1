@@ -63,7 +63,7 @@ function Get-BasetuneConfig {
     #   only tenantId / clientId present    → ClientSecret (UI default)
     #   only path present                   → None (offline baseline)
     # Online tenants also get an empty entry for every missing required field, so
-    # it shows up in Tenant Configuration. A set authMethod is never changed.
+    # it shows up in Baseline Configuration. A set authMethod is never changed.
     # Repairs are saved below.
     if ($cfg.PSObject.Properties['tenant'] -and $cfg.tenant) {
         foreach ($tProp in @($cfg.tenant.PSObject.Properties)) {
@@ -115,7 +115,7 @@ function Get-BasetuneConfig {
                 Write-Log 'Config' "Missing 'authMethod' for '$label'. Set to $auth ($why)" 'WARN'
             }
             if ($missing.Count -gt 0) {
-                Write-Log 'Config' "Missing $(($missing | ForEach-Object { "'$_'" }) -join ', ') for '$label'. Update details in Tenant Configuration" 'WARN'
+                Write-Log 'Config' "Missing $(($missing | ForEach-Object { "'$_'" }) -join ', ') for '$label'. Update details in Baseline Configuration" 'WARN'
             }
         }
     }
@@ -130,7 +130,7 @@ function Get-BasetuneConfig {
         Write-Log 'Config' "Settings moved from Config.json to Options.json with default values" 'INFO'
     }
 
-    # ── Maximum field lengths (same as Tenant Configuration) ─────────────────
+    # ── Maximum field lengths (same as Baseline Configuration) ─────────────────
     # displayName > 64: shortened and saved (only a label). tenantId /
     # clientId / certThumbprint > 64: wrong anyway, only reported (shortening
     # would silently make another wrong value). clientSecret is encrypted, so
@@ -152,7 +152,7 @@ function Get-BasetuneConfig {
                              @{ Key = 'certThumbprint'; Name = 'Certificate Thumbprint' })) {
                 $v = [string](Get-NodeValue $node $f.Key)
                 if ($v.Length -gt 64) {
-                    Write-Log 'Config' "$($f.Name) for '$label' in Config.json is longer than 64 characters. Update details in Tenant Configuration" 'WARN'
+                    Write-Log 'Config' "$($f.Name) for '$label' in Config.json is longer than 64 characters. Update details in Baseline Configuration" 'WARN'
                 }
             }
         }
@@ -160,7 +160,7 @@ function Get-BasetuneConfig {
 
     # ── Secrets stay encrypted in memory ──────────────────────────────────────
     # clientSecret stays "DPAPI:<blob>" for the whole session, decrypted only
-    # when needed (New-GraphConnection; Tenant Configuration on select), so no
+    # when needed (New-GraphConnection; Baseline Configuration on select), so no
     # save can write a plaintext secret by mistake. A legacy plaintext secret
     # on disk is encrypted here and written back, in memory too.
     $configChanged = $repaired   # repaired entries are saved together with any secret migration
@@ -303,7 +303,7 @@ function Get-BasetuneOptions {
         foreach ($k in $defaults.Keys) { $opt[$k] = $defaults[$k] }
         $write = $true
         # Log file only: on a first start the view shows one line ("Click the
-        # gear icon ..."), not one per file created.
+        # layers icon ..."), not one per file created.
         Write-Log 'Config' "Options.json created with default values" 'INFO' -FileOnly
     } else {
         $raw = $null
@@ -365,10 +365,13 @@ function Get-BasetuneOptions {
             }
         }
 
-        # Theme: light / dark
+        # Theme: light / dark. "basetune" and "material" (earlier themes, now the
+        # colours of dark) become dark without a warning.
         $thRaw  = if (& $has 'theme') { "$($raw.theme)" } else { $null }
         $thNorm = "$thRaw".Trim().ToLower()
-        if ($thNorm -notin @('light', 'dark')) {
+        if ($thNorm -in @('basetune', 'material')) {
+            $opt.theme = 'dark'; $write = $true
+        } elseif ($thNorm -notin @('light', 'dark')) {
             $opt.theme = 'dark'; $write = $true
             if ($null -eq $thRaw) {
                 Write-Log 'Config' "Options.json is missing theme setting. Set to default (dark)" 'INFO'
@@ -416,7 +419,7 @@ function Save-BasetuneOptions {
     $out = [ordered]@{
         reportPath = $ReportPath
         platforms  = [string[]](Get-ValidPlatforms $Platforms)   # always an array, also with one platform
-        theme      = if ($Theme -eq 'light') { 'light' } else { 'dark' }
+        theme      = if ("$Theme".ToLower() -eq 'light') { 'light' } else { 'dark' }
         maxThreads = Get-ValidMaxThreads $MaxThreads
     }
     $dir = Split-Path -Parent $Path

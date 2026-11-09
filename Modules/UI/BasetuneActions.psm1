@@ -49,7 +49,7 @@ public class BasetunePolicyItem : INotifyPropertyChanged {
 "@
 }
 
-# Download button (Set-DownloadButtonStyle): orange when there are no
+# Download button (Set-DownloadButtonStyle): filled blue when there are no
 # definition or category files at all (downloaded or .default), otherwise the
 # normal icon-bar look. Called at startup, after each download and compare,
 # and after a cancel.
@@ -90,11 +90,11 @@ function Start-Load {
     $selectedKey = $cmb.SelectedValue
 
     if (-not $selectedKey) {
-        Clear-UILog $Side "No $($Side.ToLowerInvariant()) tenant selected. Add a tenant via Tenant Configuration first"
+        Clear-UILog $Side "No $($Side.ToLowerInvariant()) tenant selected. Add a tenant via Baseline Configuration first"
         Set-Busy $false
         return
     }
-    $AppState.lastPickedTenantSide = $Side   # Tenant Configuration opens on the tenant loaded last
+    $AppState.lastPickedTenantSide = $Side   # Baseline Configuration opens on the tenant loaded last
 
     $entry      = Get-TenantEntry $selectedKey
     $tenantNode = if ($entry) { $entry.Node } else { $null }
@@ -111,7 +111,7 @@ function Start-Load {
 
     $resolvedPath = if ($origin -eq 'Offline' -and -not $tenantJsonPath) {
         $label = Get-UITenantLabel $selectedKey
-        Clear-UILog $Side "No path configured for '$label'. Open Tenant Configuration and set a policy folder" 'ERROR'
+        Clear-UILog $Side "No path configured for '$label'. Open Baseline Configuration and set a policy folder" 'ERROR'
         Set-Busy $false
         return
     } else {
@@ -161,7 +161,7 @@ function Start-Load {
             # A missing policy folder is reported (after the start lines), not
             # created: it was renamed, removed or is on a drive that is not
             # there now. The folder of a new offline baseline is created on
-            # Save in Tenant Configuration.
+            # Save in Baseline Configuration.
             if ($S.Origin -eq 'Offline' -and -not (Test-Path -LiteralPath $S.JsonPath -PathType Container)) {
                 Write-Log $S.Side "Policy folder '$($S.JsonPath)' not found" 'WARN'
                 [PSCustomObject]@{ __type = 'status'; Success = $false; Reason = 'folder' }
@@ -175,6 +175,9 @@ function Start-Load {
                     [PSCustomObject]@{ __type = 'status'; Success = $false; Reason = 'connection' }
                     return
                 }
+                # On the shared table at once: a cancelled load keeps it too
+                # (Stop-ActiveRunspace), not only a finished one (OnDone).
+                $S.SignedIn = $conn
             }
 
             $policies = @(Resolve-PolicySource `
@@ -288,6 +291,8 @@ function Start-Load {
             else                            { $UI.txtTargetFilter.Text = '' }
         }
         Set-FilterMode -Side $job.LoadSide -Mode $(if ($loadOk -and $job.LoadItems.Count -gt 0) { 'Search' } else { 'Filter' })
+        # The filter of this load in the tooltip of the count row.
+        Set-CountToolTip -Side $job.LoadSide -Filter $(if ($loadOk -and $job.LoadItems.Count -gt 0) { $job.LoadFilter } else { '' })
 
         $UI.progressBar.IsIndeterminate = $false
         Update-Counts
@@ -349,15 +354,17 @@ function Start-Load {
 # calls, which is why it stays in the UI process.
 # ═════════════════════════════════════════════════════════════════════════════
 
+# Cancel a running compare (Compare is its Cancel while it runs). No
+# report: View Report keeps the previous one; the run folder is removed once
+# the runspace stopped.
+function script:Stop-Compare {
+    $AppState.reportPath = $AppState.comparePrevReportPath
+    Stop-ActiveRunspace -Side 'Compare' -RemoveDir $AppState.compareRunDir -RemoveDirIfEmpty $AppState.comparePairDir
+}
+
 function Start-Compare {
-    # After a few seconds a running compare turns this button into Cancel.
-    if ($UI.btnCompare.Tag -eq 'cancel') {
-        # No report: Run Report keeps the previous one; the run folder is
-        # removed once the runspace stopped.
-        $AppState.reportPath = $AppState.comparePrevReportPath
-        Stop-ActiveRunspace -Side 'Compare' -RemoveDir $AppState.compareRunDir -RemoveDirIfEmpty $AppState.comparePairDir
-        return
-    }
+    # Compare is Cancel while a compare runs (Set-CompareButtonMode).
+    if ($UI.btnCompare.Tag -eq 'cancel') { Stop-Compare; return }
 
     # The ticked items' own policy objects, not matched on name: two policies
     # can share a name.
@@ -550,9 +557,9 @@ function Start-Compare {
     } -Context @{ Type = 'Compare'; Side = '' }
     # Search / sort stay usable during the compare (Test-ListToolsAllowed).
     Enable-ListToolsDuringJob
-    # Red Cancel after 5 seconds (see $AppState.compareCancelTimer).
-    $AppState.compareCancelTimer.Stop()
-    $AppState.compareCancelTimer.Start()
+    # Compare becomes its Cancel at once (only when the compare runs: a start
+    # that failed has already cleared the job).
+    if ($AppState.CurrentJob -and $AppState.CurrentJob.Type -eq 'Compare') { Set-CompareButtonMode 'cancel' }
 }
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -756,7 +763,7 @@ function Start-DefinitionPreload {
         if (-not $done) { return }
 
         $p.Timer.Stop()
-        # The last startup line ("Ready to load policies" / "Click the gear
+        # The last startup line ("Ready to load policies" / "Click the layers
         # icon ..."), after the "Cached ..." lines (set in BasetuneUI.ps1).
         if ($AppState.startupLastLine) {
             Write-UILog $AppState.startupLastLine.Label $AppState.startupLastLine.Text
@@ -827,9 +834,12 @@ function Start-DefinitionDownload {
         Write-Log 'Download' "Downloading setting and category definitions using tenant '$($S.DownloadLabel)'..." 'INFO'
         $conn = Get-GraphConnection -Config $S.TenantNode -Label 'Download' -Cached $S.CachedConnection
         if (-not $conn) {
-            Write-Log 'Download' "Could not connect to tenant '$($S.DownloadLabel)'. Check the credentials in Tenant Configuration. See Basetune.log for details" 'ERROR'
+            # No line here: Get-GraphConnection already logged why ("Could not
+            # authenticate with Microsoft Graph ...").
             return [PSCustomObject]@{ Success = $false; Logged = $true }
         }
+        # On the shared table at once: a cancelled download keeps it too.
+        $S.SignedIn = $conn
         # Kept by the UI for the next Load / Download of this tenant (see OnDone).
         [PSCustomObject]@{ __type = 'connection'; conn = $conn }
 
@@ -931,19 +941,16 @@ function Initialize-BasetuneActions {
 
     $UI.btnOpenDownload.Add_Click({ Start-DefinitionDownload })
 
-    $UI.btnOpenReport.Add_Click({ if (Test-Path $AppState.reportPath) { Start-Process $AppState.reportPath } })
+    # View Report / View Details: Open-UILogPath reports a
+    # missing file in the log view ("Report file not found: <path>.
+    # Run the compare again", ...); a file deleted after the compare is not
+    # silently ignored.
+    $UI.btnOpenReport.Add_Click({ Open-UILogPath -Path $AppState.reportPath -Kind 'Report' })
     # View Details: Diff.csv next to Report.html, in the default .csv app.
     if ($UI.btnViewDetails) {
         $UI.btnViewDetails.Add_Click({
             $diffCsv = if ($AppState.reportPath) { Join-Path (Split-Path $AppState.reportPath -Parent) 'Diff.csv' } else { $null }
-            if ($diffCsv -and (Test-Path -LiteralPath $diffCsv)) {
-                try { Start-Process $diffCsv -ErrorAction Stop } catch {
-                    Write-Log 'Report' 'Could not open Diff.csv. See Basetune.log for details' 'ERROR'
-                    Write-Log 'Report' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
-                }
-            } else {
-                Write-Log 'Report' 'Diff.csv not found. Run the compare again' 'WARN'
-            }
+            Open-UILogPath -Path $diffCsv -Kind 'Details'
         })
     }
 }

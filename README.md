@@ -7,7 +7,7 @@
 ## What it does
 Basetune is a PowerShell-based tool to compare Intune **Settings Catalog** and **Security Baseline** policies between online tenants via Microsoft Graph or offline baselines using JSON exports.
 
-![Basetune UI](docs/Main-3.0.4.png)
+![Basetune UI](docs/Main-3.1.0.png)
 
 Comparison capabilities:
 
@@ -36,10 +36,23 @@ Comparison capabilities:
 ```
 pwsh.exe .\BasetuneUI.ps1
 ```
-3. Click Tenant Configuration (gear icon) to add an online tenant or an offline baseline.
+3. Click Baseline Configuration (layers icon) to add an online tenant or an offline baseline.
 4. Select a source and a target, then click **Load** on both sides.
 5. All loaded policies are selected by default. Click **Compare Policies** to run the comparison.
 6. Click **View Report** to open the HTML report, or **View Details** to open Diff.csv.
+
+<br>
+
+## Baseline Configuration
+
+Click the layers icon at the bottom left to open Baseline Configuration. Each baseline is either an online tenant or an offline baseline:
+
+- **Online tenant** — Enter the tenant ID and client ID of the app registration, then choose **Client Secret** or **Certificate** (thumbprint). On save, Basetune tests the connection to Microsoft Graph; the tenant is saved even if the test fails.
+- **Offline baseline** — Choose **None (JSON)** and select the folder that contains the exported policy files.
+
+![Baseline Configuration](docs/Config-3.1.0.png)
+
+> Use **+** to add a baseline and the bin icon to remove the selected one. Baselines are saved in `Config\Config.json`, which you can reuse in a new version of Basetune.
 
 <br>
 
@@ -83,7 +96,7 @@ Basetune also detects cross-policy issues within the target:
 
 The HTML report is a standalone file that works offline in any browser.
 
-![Basetune Report](docs/Report-3.0.5.png)
+![Basetune Report](docs/Report-3.1.0.png)
 
 <br>
 
@@ -99,7 +112,7 @@ Basetune includes a command-line interface for running comparisons and exports f
 
 ![Basetune CLI](docs/CLI-3.0.4.png)
 
-> The client secret in Config.json can only be decrypted by the Windows user who saved it. To run the CLI under another account (for example, as a scheduled task), use a separate Basetune folder for that account and enter the client secret once in Tenant Configuration while signed in as that account.
+> The client secret in Config.json can only be decrypted by the Windows user who saved it. To run the CLI under another account (for example, as a scheduled task), use a separate Basetune folder for that account and enter the client secret once in Baseline Configuration while signed in as that account.
 
 <br>
 

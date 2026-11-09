@@ -84,7 +84,6 @@ function Show-TenantPickerDialog {
         if (-not $cmb.SelectedItem) { return }
         $script:dlgPickedKey = $cmb.SelectedItem.Tag; $dlg.DialogResult = $true
     })
-    $btnCancel.Content = 'Close'
     $btnCancel.Add_Click({ $dlg.DialogResult = $false })
     $dlg.Add_KeyDown({ param($s,$e); if ($e.Key -eq 'Escape') { $dlg.DialogResult = $false } })
     $dlg.ShowDialog() | Out-Null

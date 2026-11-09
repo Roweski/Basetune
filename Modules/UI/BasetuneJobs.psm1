@@ -141,6 +141,7 @@ function Start-Runspace {
     $job.Done     = $false
     $job.Timer    = $null
     $job.Output   = @()
+    $job.Shared   = $Shared   # read on cancel: a sign-in the work put there (SignedIn)
     foreach ($k in $Context.Keys) { $job[$k] = $Context[$k] }
     $AppState.CurrentJob = $job
 
@@ -233,6 +234,7 @@ function Start-Runspace {
                 $job.Output   = $null
                 $job.Timer    = $null
                 $job.OnDone   = $null
+                $job.Shared   = $null
                 $job          = $null
                 $AppState.CurrentJob = $null
 
@@ -282,6 +284,11 @@ function Stop-ActiveRunspace {
     $job = $AppState.CurrentJob
     if ($job) {
         if ($job.Timer) { $job.Timer.Stop() }
+        # A sign-in the job already made (Load / Download put it on $Shared as
+        # SignedIn) is kept for the next action on that tenant, as OnDone does
+        # for a finished job: a cancel right after signing in costs no second one.
+        $signKey = if ($job.LoadKey) { $job.LoadKey } elseif ($job.DownloadKey) { $job.DownloadKey } else { $null }
+        if ($signKey -and $job.Shared -and $job.Shared['SignedIn']) { $AppState.graphConnections[$signKey] = $job.Shared['SignedIn'] }
         if ($job.PS) {
             $stopHandle = $null
             try { $stopHandle = $job.PS.BeginStop($null, $null) } catch {}
@@ -302,6 +309,7 @@ function Stop-ActiveRunspace {
         $job.Output   = $null
         $job.Timer    = $null
         $job.OnDone   = $null
+        $job.Shared   = $null
     }
 
     # Set-Busy $false nulls $AppState.CurrentJob and restores btnOpenReport
@@ -312,7 +320,7 @@ function Stop-ActiveRunspace {
     # Source + Target may still be loaded from an earlier load.
     Update-Counts
 
-    # Re-apply the Download button look (orange when definitions are missing).
+    # Re-apply the Download button look (filled blue when definitions are missing).
     Update-DownloadButton
 
     # Side: 'Source', 'Target', 'Download', 'Compare', 'Source Export', ...
@@ -334,7 +342,7 @@ function Stop-ActiveRunspace {
 
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
-# Creates the job timers (network watcher, stop cleanup, compare Cancel).
+# Creates the job timers (network watcher, stop cleanup).
 # Called once from BasetuneUI.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-BasetuneJobs {
@@ -395,19 +403,6 @@ function Initialize-BasetuneJobs {
             }
         }
         if ($AppState.StoppingJobs.Count -eq 0) { $AppState.StopCleanupTimer.Stop() }
-    })
-
-    # ── Compare: show Cancel only after a few seconds ────────────────────────────
-    # The red Cancel only appears when a compare still runs after 5 s, so a
-    # short compare doesn't flash red. Set-Busy $false stops the timer and
-    # turns the button back into Compare Policies.
-    $AppState.compareCancelTimer = [System.Windows.Threading.DispatcherTimer]::new()
-    $AppState.compareCancelTimer.Interval = [TimeSpan]::FromSeconds(5)
-    $AppState.compareCancelTimer.Add_Tick({
-        $AppState.compareCancelTimer.Stop()
-        if ($AppState.CurrentJob -and $AppState.CurrentJob.Type -eq 'Compare' -and $AppState.CurrentJob.PS) {
-            Set-CompareButtonMode 'cancel'
-        }
     })
 }
 

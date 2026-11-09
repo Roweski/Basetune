@@ -1,7 +1,7 @@
 # =============================================================================
 # BasetuneSettings.psm1
 # Config.json (tenants) and Options.json in the UI: load at startup, save,
-# and fill the tenant dropdowns (main window + Tenant Configuration).
+# and fill the tenant dropdowns (main window + Baseline Configuration).
 # The tenant form itself is in BasetuneConfigWindow.psm1; Get-TenantMode is in
 # BasetuneHelpers.psm1 (shared with the CLI).
 # =============================================================================
@@ -53,7 +53,7 @@ function script:Get-SortedTenantKeys {
 function Import-Options {
     $opt = Get-BasetuneOptions -Path "$($AppState.ScriptRoot)\Config\Options.json"
     $AppState.savedMaxThreads = "$($opt.MaxThreads)"
-    $AppState.savedTheme      = if ($opt.Theme -eq 'light') { 'light' } else { 'dark' }
+    $AppState.savedTheme      = $opt.Theme   # light / dark (checked by Import-BasetuneOptions)
     $AppState.savedPlatforms  = [string[]](Get-ValidPlatforms $opt.Platforms)
     $rp = Resolve-FolderPath -Path $opt.ReportPath -BasePath $AppState.ScriptRoot
     if ($rp.Error) {
@@ -76,7 +76,7 @@ function Save-Options {
 # ── Load config ───────────────────────────────────────────────────────────────
 function Import-Config {
     # -Quiet: reload without logging an invalid Config.json again (closing
-    # Tenant Configuration); startup and Save config still report it.
+    # Baseline Configuration); startup and Save config still report it.
     param([switch]$Quiet)
     $configPath = "$($AppState.ScriptRoot)\Config\Config.json"
     $AppState.tenantStore.Clear()
@@ -121,7 +121,7 @@ function Import-Config {
     } else {
         # No Config.json (first start, or removed): create it with an empty
         # tenant block (and the Config folder). Log file only; the view shows
-        # "Click the gear icon ..." once the window is loaded.
+        # "Click the layers icon ..." once the window is loaded.
         try {
             Save-Config
             Write-Log 'Config' 'Config.json created with default values' 'INFO' -FileOnly
@@ -146,7 +146,7 @@ function Update-ConfigDropdowns {
 # Configuration: the tenant at its old position (-PrevSrcIndex /
 # -PrevTgtIndex, the index in the list before the save) is selected, i.e.
 # the next one, or the new last one when the removed tenant was last; the
-# same rule as the tenant list in Tenant Configuration. No index: the first.
+# same rule as the tenant list in Baseline Configuration. No index: the first.
 function Sync-MainTenantDropdowns {
     param([string]$PreferSrcTag = '', [string]$PreferTgtTag = '', [int]$PrevSrcIndex = -1, [int]$PrevTgtIndex = -1)
     $sortedKeys = @(Get-SortedTenantKeys)
@@ -164,9 +164,10 @@ function Sync-MainTenantDropdowns {
     # (with tenants the first one is always selected).
     $hintVis = if (@($AppState.tenantStore.Keys).Count -gt 0) { 'Collapsed' } else { 'Visible' }
     foreach ($h in @($UI.txtSourceTenantHint, $UI.txtTargetTenantHint)) { if ($h) { $h.Visibility = $hintVis } }
-    # Tenant Configuration button: normal look and tooltip (Reset-ConfigButtonStyle).
-    if (Get-Command Reset-ConfigButtonStyle -ErrorAction SilentlyContinue) {
-        Reset-ConfigButtonStyle
+    # Baseline Configuration button: the attention look without tenants, else the
+    # normal one (Update-ConfigButtonStyle).
+    if (Get-Command Update-ConfigButtonStyle -ErrorAction SilentlyContinue) {
+        Update-ConfigButtonStyle
     }
     $AppState.tenantList = @($AppState.tenantStore.Keys | ForEach-Object {
         $k = $_; $n = $AppState.tenantStore[$k]

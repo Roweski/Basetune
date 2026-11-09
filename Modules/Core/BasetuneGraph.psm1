@@ -131,7 +131,7 @@ function New-GraphConnection {
         [Parameter(Mandatory)][string]$Label,
         # Level of the "Cannot connect" / "Could not authenticate" lines: ERROR
         # when the action stops (load, export, download, token refresh), WARN
-        # for the test on Save in Tenant Configuration (the save goes on).
+        # for the test on Save in Baseline Configuration (the save goes on).
         [ValidateSet('WARN', 'ERROR')][string]$FailLevel = 'ERROR'
     )
 
@@ -158,12 +158,12 @@ function New-GraphConnection {
     if ($authMethod -eq 'ClientSecret') {
         $storedSecret = [string](Get-NodeValue $Config 'clientSecret')
         if (-not $storedSecret) {
-            Write-Log $Label "Cannot connect: clientSecret is empty. Enter it in Tenant Configuration" $FailLevel
+            Write-Log $Label "Cannot connect: clientSecret is empty. Enter it in Baseline Configuration" $FailLevel
             return $null
         }
         $secret = Unprotect-Secret $storedSecret
         if (-not $secret) {
-            Write-Log $Label "Could not decrypt the Client Secret (encrypted by another Windows user or on another PC). Re-enter the secret in Tenant Configuration" "ERROR"
+            Write-Log $Label "Could not decrypt the Client Secret (encrypted by another Windows user or on another PC). Re-enter the secret in Baseline Configuration" "ERROR"
             return $null
         }
     }
@@ -222,7 +222,7 @@ function New-GraphConnection {
 
 # The sign-in fields of a tenant entry as one string: authMethod, tenantId,
 # clientId, clientSecret (as stored, encrypted) and certThumbprint. A Save in
-# Tenant Configuration that changes any of them (also a re-entered secret:
+# Baseline Configuration that changes any of them (also a re-entered secret:
 # the encrypted value changes) gives another fingerprint.
 function script:Get-GraphConfigFingerprint {
     param($Config)

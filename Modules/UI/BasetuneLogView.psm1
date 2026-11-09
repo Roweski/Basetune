@@ -42,41 +42,53 @@ function script:Test-UILogIsFile {
     return ((Get-UILogName $Path) -match '\.[A-Za-z0-9]{1,5}$')
 }
 
+# Open a file or folder (a log link, the log / View Report / View Details
+# buttons): a missing path or one without read permission is
+# reported in the log; a file type without an app is shown in Explorer.
+# -Kind picks the "not found" line: a log link says "Path not found", the
+# buttons name what they open (and, for a report file, what to do).
+function Open-UILogPath {
+    param([string]$Path, [ValidateSet('Path', 'Log', 'Report', 'Details')][string]$Kind = 'Path')
+    if (-not $path) { return }
+    if (-not (Test-Path -LiteralPath $path)) {
+        # Test-Path is also $false for a path without read permission;
+        # GetAttributes then throws UnauthorizedAccessException.
+        $denied = $false
+        # PowerShell wraps .NET method errors: check the inner exception.
+        try { [void][System.IO.File]::GetAttributes($path); $denied = $true }
+        catch {
+            $ex = $_.Exception
+            if ($ex -is [System.Management.Automation.MethodInvocationException] -and $ex.InnerException) { $ex = $ex.InnerException }
+            if ($ex -is [System.UnauthorizedAccessException]) { $denied = $true }
+        }
+        if ($denied) {
+            $what = if (Test-UILogIsFile $path) { 'file' } else { 'folder' }
+            Write-UILog 'Basetune' "Could not open the $what. See Basetune.log for details" 'WARN'
+            Write-Log 'Basetune' "Details: no access to '$path'" 'WARN' -FileOnly
+        } else {
+            switch ($Kind) {
+                'Log'     { Write-UILog 'Basetune' "Log file not found: $path" 'WARN' }
+                'Report'  { Write-UILog 'Report' "Report file not found: $path. Run the compare again" 'WARN' }
+                'Details' { Write-UILog 'Report' "Details file not found: $path. Run the compare again" 'WARN' }
+                default   { Write-UILog 'Basetune' "Path not found: $path" 'WARN' }
+            }
+        }
+        return
+    }
+    try { Start-Process -FilePath $path -ErrorAction Stop }
+    catch {
+        # No app associated with the file type: show it in Explorer.
+        try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch {}
+    }
+}
+
 function script:New-UILogLink {
     param([string]$Path, [string]$Display)
     $link = [System.Windows.Documents.Hyperlink]::new([System.Windows.Documents.Run]::new($Display))
     $link.Tag     = $Path
     $link.ToolTip = $Path
     $link.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'AccentBrush')
-    $link.Add_Click({
-        param($sender, $e)
-        $path = [string]$sender.Tag
-        if (-not (Test-Path -LiteralPath $path)) {
-            # Test-Path is also $false for a path without read permission;
-            # GetAttributes then throws UnauthorizedAccessException.
-            $denied = $false
-            # PowerShell wraps .NET method errors: check the inner exception.
-            try { [void][System.IO.File]::GetAttributes($path); $denied = $true }
-            catch {
-                $ex = $_.Exception
-                if ($ex -is [System.Management.Automation.MethodInvocationException] -and $ex.InnerException) { $ex = $ex.InnerException }
-                if ($ex -is [System.UnauthorizedAccessException]) { $denied = $true }
-            }
-            if ($denied) {
-                $what = if (Test-UILogIsFile $path) { 'file' } else { 'folder' }
-                Write-UILog 'Basetune' "Could not open the $what. See Basetune.log for details" 'WARN'
-                Write-Log 'Basetune' "Details: no access to '$path'" 'WARN' -FileOnly
-            } else {
-                Write-UILog 'Basetune' "Path not found: $path" 'WARN'
-            }
-            return
-        }
-        try { Start-Process -FilePath $path -ErrorAction Stop }
-        catch {
-            # No app associated with the file type: show it in Explorer.
-            try { Start-Process explorer.exe -ArgumentList "/select,`"$path`"" } catch {}
-        }
-    })
+    $link.Add_Click({ param($sender, $e) Open-UILogPath -Path ([string]$sender.Tag) })
     return $link
 }
 
@@ -90,23 +102,23 @@ function script:New-UILogParagraph {
     return $p
 }
 
-# "See Basetune.log for details" is a link as a whole that opens Basetune.log
-# (without "for details" just "See Basetune.log"; older wording "the log
-# file" too). "See Compare.log for details" (the warnings at the end of a compare)
+# "See Basetune.log for details" is shown as "See log for details" ("See
+# Basetune.log": "See log"), plain text: the log button left of the log line
+# opens Basetune.log; the log file keeps the full wording. "See Compare.log for
+# details" (the warnings at the end of a compare)
 # is a link as a whole to Compare.log in the folder of the running compare
 # (written by Invoke-BaselineCompare, next to the report); without "for
 # details" just "See Compare.log".
-$script:UILogFileRegex = [regex]'(?<log>See Basetune\.log(?: for details)?|the log file)|(?<cmp>See Compare\.log(?: for details)?)'
+$script:UILogFileRegex = [regex]'(?<cmp>See Compare\.log(?: for details)?)'
 
 function script:Add-UILogText {
     param([System.Windows.Documents.Paragraph]$Paragraph, [string]$Text, [switch]$NoLinks)
     if (-not $Text) { return }
+    $Text = $Text.Replace('See Basetune.log', 'See log')   # plain text, see UILogFileRegex
     $pos = 0
     if (-not $NoLinks) {
         foreach ($m in $script:UILogFileRegex.Matches($Text)) {
-            $target = if ($m.Groups['cmp'].Success) {
-                          if ($AppState.compareRunDir) { Join-Path $AppState.compareRunDir 'Compare.log' }
-                      } else { $AppState.logFile }
+            $target = if ($AppState.compareRunDir) { Join-Path $AppState.compareRunDir 'Compare.log' }
             if (-not $target) { continue }   # left as plain text below
             if ($m.Index -gt $pos) {
                 $Paragraph.Inlines.Add([System.Windows.Documents.Run]::new($Text.Substring($pos, $m.Index - $pos)))
@@ -261,7 +273,8 @@ function Add-UILogLines {
             # "wksfirewallconfig.json" is not about Config.json.
             if ($shown -match '\bConfig\.json\b') {
                 $p = New-UILogParagraph
-                # No path links here, but "See Basetune.log for details" stays a link.
+                # No path links here, but "See Compare.log" stays a link (and "See
+                # Basetune.log" becomes "See log").
                 Add-UILogText -Paragraph $p -Text $shown
                 if ($level -eq 'ERROR') {
                     $p.SetResourceReference([System.Windows.Documents.TextElement]::ForegroundProperty, 'ErrorBrush')
@@ -276,10 +289,10 @@ function Add-UILogLines {
             # Most lines ("Loaded policy: ...", 1000+ in a large load) hold no path
             # and no link text. The regex calls below (.NET calls, slow per line)
             # only run when the line can match: a path needs "X:\" or "\\", a link "See
-            # Basetune.log" / "See Compare.log" (checked case-insensitively here, so nothing
+            # Compare.log" or the "See Basetune.log" rewrite (checked case-insensitively here, so nothing
             # the case-sensitive link regex matches is skipped).
             $hasPath = $shown -match '[A-Za-z]:\\|\\\\'
-            $plain   = $shown -and -not $hasPath -and $shown -notmatch 'See Basetune\.log|the log file|See Compare\.log'
+            $plain   = $shown -and -not $hasPath -and $shown -notmatch 'See Basetune\.log|See Compare\.log'
 
             # Folder bookkeeping for the short file names (see above).
             $first = if ($hasPath) { $script:UILogPathRegex.Match($shown) } else { $null }
@@ -392,6 +405,7 @@ function Clear-UILog {
 }
 
 Export-ModuleMember -Function @(
+    'Open-UILogPath',
     'Add-UILogLines',
     'Clear-UILogView',
     'Write-UILog',

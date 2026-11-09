@@ -44,7 +44,7 @@ $ScriptRoot = if ($MyInvocation.MyCommand.Path) {
 #   BasetuneJobs           runspace engine (Start-Runspace / Stop-ActiveRunspace)
 #   BasetuneActions        Load, Compare, Export, Download, definition preload
 #   BasetunePolicyLists    policy lists, counts, filter / sort, tenant dropdown events
-#   BasetuneConfigWindow   Tenant Configuration window and tenant form
+#   BasetuneConfigWindow   Baseline Configuration window and tenant form
 #   BasetuneOptionsWindow  Options window
 #   BasetuneDownloadWindow Download definitions window (tenant picker)
 $uiModules = @(
@@ -167,10 +167,18 @@ $AppState.CurrentJob = $null
 # Compare's OnDone overrides it when a fresh report is produced.
 $AppState.btnOpenReportPriorState = $null
 
-# Last startup line ("Click the gear icon ..." / "Ready to load policies"),
+# Last startup line ("Click the layers icon ..." / "Ready to load policies"),
 # written once the definition preload is done (Start-DefinitionPreload), so it
 # comes after the definitions lines; right away when nothing is preloaded.
 $AppState.startupLastLine = $null
+
+# Action buttons icon only (narrow window, Set-StripMode); $null until the
+# first size of the actions card is known.
+$AppState.stripNarrow = $null
+
+# Lines shown by the expanded log (drag its top edge; 2 up to half of the
+# policy list cards, Set-LogLines). Not saved: 5 at every start.
+$AppState.logLines = 5
 
 # ── Build window from XAML file ───────────────────────────────────────────────
 try {
@@ -189,22 +197,31 @@ Register-BasetuneControls -Root $UI.Window -Names @(
     'cmbSourceTenant', 'cmbTargetTenant',
     'txtSourceFilter', 'txtTargetFilter', 'txtSourceFilterHint', 'txtTargetFilterHint',
     'txtSourceTenantHint', 'txtTargetTenantHint',
-    'btnClearSourceFilter', 'btnClearTargetFilter',
+    'btnClearSourceFilter', 'btnClearTargetFilter', 'pathSourceFilterIcon', 'pathTargetFilterIcon',
+    'vbSourceLoadIcon', 'vbTargetLoadIcon', 'pathSourceLoadIcon', 'pathTargetLoadIcon',
+    'btnSourceConfig', 'btnTargetConfig',
     'btnSourceLoad', 'btnTargetLoad', 'lstSource', 'lstTarget',
     'lblSourceCountOn', 'lblSourceCountSlash', 'lblSourceCountOf', 'lblTargetCountOn', 'lblTargetCountSlash', 'lblTargetCountOf',
+    'gridSourceCount', 'gridTargetCount',
     'icoSourceFilter', 'icoTargetFilter', 'lblSourceNoMatch', 'lblTargetNoMatch',
     'chkSourceAll', 'chkTargetAll', 'pnlSourceSelect', 'pnlTargetSelect',
     'btnSourceSortName', 'btnSourceSortPlatform', 'btnSourceSortType',
     'btnTargetSortName', 'btnTargetSortPlatform', 'btnTargetSortType',
     'btnSourceExport', 'btnTargetExport',
+    # Source / target cards (strip, list) and the actions card (log, buttons):
+    # clipped to their rounded frame
+    'stripSource', 'stripTarget', 'cardSource', 'cardTarget', 'cardActions', 'stripActions', 'cardLogLine', 'cardButtons', 'stripLogLine', 'hostToggleCollapsed', 'hostToggleExpanded', 'sepToggleExpanded', 'hostLogCollapsed', 'hostLogExpanded', 'sepLogExpanded', 'sepStripGap',
     # Toolbar, progress and log
     'btnCompare', 'btnOpenDownload', 'btnOpenReport', 'btnViewDetails',
-    'btnOpenConfig', 'btnOpenOptions', 'progressBar', 'txtLog',
-    'btnToggleLog', 'pathToggleLog'
+    'btnOpenConfig', 'btnOpenOptions', 'progressBar', 'bdLog', 'sepLog', 'bdLogLine', 'txtLog',
+    'btnToggleLog', 'pathToggleLog', 'btnOpenLog', 'thumbLogResize'
 )
 
 # ── Window chrome and log view (BasetuneWindow.psm1) ────────────────────────
 Initialize-BasetuneWindow
+
+# ── Attention tooltip: no tenant / no definitions (BasetuneButtons.psm1) ────
+Initialize-AttentionTip
 
 # Write-Log on the UI thread goes straight into txtLog (runspaces set their own
 # callback into their LogQueue, drained by the timer Tick). Without it,
@@ -221,6 +238,8 @@ Initialize-BasetuneJobs
 $AppState.sourceItems = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 # Load filter per side that last gave "No policies match the selected filters" (see Reset-Side).
 $AppState.noMatchLoadFilter = @{ Source = $null; Target = $null }
+# Name filter field per side: 'Filter' (load filter) or 'Search' (in the loaded list), see Set-FilterMode.
+$AppState.filterMode = @{ Source = 'Filter'; Target = 'Filter' }
 $AppState.targetItems = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
 # Sort per list (column headers Policy / Platform), see Set-ListSort.
 $AppState.listSort = @{ Source = @{ Key = 'Name'; Desc = $false }; Target = @{ Key = 'Name'; Desc = $false } }
@@ -275,17 +294,18 @@ $AppState.suppressEvents = $false
 $AppState.lastSourceTenantKey = if ($UI.cmbSourceTenant.SelectedItem) { $UI.cmbSourceTenant.SelectedItem.Tag } else { $null }
 $AppState.lastTargetTenantKey = if ($UI.cmbTargetTenant.SelectedItem) { $UI.cmbTargetTenant.SelectedItem.Tag } else { $null }
 Update-ExportButtons
-# Empty cards: "Ready to load policies" when a tenant is selected.
+# Empty cards: "Ready to load source policies" / "... target policies" when
+# a tenant is selected.
 Update-EmptyState 'Source'; Update-EmptyState 'Target'
 
 $UI.Window.Add_Loaded({
     # Last line of the startup, after the definitions lines: no tenants (first
-    # start, or emptied) "Click the gear icon ...", else "Ready to load
+    # start, or emptied) "Click the layers icon ...", else "Ready to load
     # policies" (as in the empty cards). None when Config.json is invalid or
     # unreadable (the error line says why). Creating Config.json /
     # Options.json is in the log file only.
     $AppState.startupLastLine = if ($AppState.configReadFailed) { $null }
-        elseif (@($AppState.tenantStore.Keys).Count -eq 0) { @{ Label = 'Config'; Text = 'Click the gear icon to configure a tenant and get started' } }
+        elseif (@($AppState.tenantStore.Keys).Count -eq 0) { @{ Label = 'Config'; Text = 'Click the layers icon to configure a tenant and get started' } }
         else { @{ Label = 'Startup'; Text = 'Ready to load policies' } }
 
     # Downloaded or shipped (.default) files both count.

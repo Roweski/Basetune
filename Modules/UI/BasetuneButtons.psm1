@@ -14,87 +14,58 @@ $script:AppState = (Get-BasetuneContext).State
 # ── Busy state — turns the active Load button into Cancel; restores on done ──
 
 function script:New-ButtonContent {
-    param([string]$IconPath, [string]$Label)
-    # Same as the XAML PrimaryBtn (Compare / Run Report): the icon Fill binds
-    # to the Button's Foreground, and New-ButtonStyle uses the same triggers,
-    # so the disabled colour reaches the icon too.
+    param([string]$IconPath, [string]$Label, [int]$Size = 15, [string]$IconMargin = '0,1,0,0')
+    # Same as the XAML Load / Compare content: the icon Fill binds to the
+    # Button's Foreground, so the colour of every style (idle, the red Cancel,
+    # the disabled colour) reaches the icon too.
     $xaml = @"
 <StackPanel xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-            Orientation="Horizontal" Margin="-2,0,0,0">
-  <Viewbox Width="16" Height="16" Stretch="Uniform" Margin="0,1,6,0" VerticalAlignment="Center">
+            Orientation="Horizontal">
+  <Viewbox Width="$Size" Height="$Size" Stretch="Uniform" Margin="$IconMargin" VerticalAlignment="Center">
     <Canvas Width="24" Height="24">
       <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
             Data="$IconPath"/>
     </Canvas>
   </Viewbox>
-  <TextBlock Text="$Label" VerticalAlignment="Center"/>
+  <TextBlock Text="$Label" Margin="6,0,0,0" VerticalAlignment="Center" Visibility="{DynamicResource StripLabelVisibility}"/>
 </StackPanel>
 "@
     return [System.Windows.Markup.XamlReader]::Parse($xaml)
 }
 
-$script:iconSync  = "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"
+# The XAML content of the Load buttons (play icon + "Load"), kept the first
+# time a load turns one into Cancel and put back when idle, so the XAML stays
+# the one place that defines it (icon, its StripPlayIconMargin).
+$script:loadIdleContent = @{}
+# Cancel X: left margin -1.5: the 18px icon is wider than
+# the 15px inside the 12.5 padding of a 40px button, so it would sit 1.5 right.
 $script:iconStop  = "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"
-$script:clrBlue   = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.Color]::FromRgb(0x1A, 0x6E, 0xF5))
-$script:clrBluHov = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.Color]::FromRgb(0x16, 0x62, 0xD9))
-$script:clrRed    = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.Color]::FromRgb(0xCC, 0x33, 0x33))
-$script:clrRedHov = [System.Windows.Media.SolidColorBrush]::new([System.Windows.Media.Color]::FromRgb(0xAA, 0x22, 0x22))
 
-function script:New-ButtonStyle {
-    # Disabled colours come from the theme palette (DynamicResource), so a
-    # disabled Load button looks right in light and dark mode.
-    param([string]$Bg, [string]$BgHover, [string]$BgDisabled = '{DynamicResource DisabledBgBrush}', [string]$FgDisabled = '{DynamicResource DisabledFgBrush}', [string]$BorderDisabled = '{DynamicResource DisabledBorderBrush}')
-    $xaml = @"
-<Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-       TargetType="Button">
-  <Setter Property="Background" Value="$Bg"/>
-  <Setter Property="Foreground" Value="White"/>
-  <Setter Property="FocusVisualStyle" Value="{DynamicResource PrimaryFocusVisual}"/>
-  <Setter Property="FontSize"   Value="14"/>
-  <Setter Property="FontWeight" Value="SemiBold"/>
-  <Setter Property="Height"     Value="32"/>
-  <Setter Property="BorderThickness" Value="0"/>
-  <Setter Property="Cursor"     Value="Hand"/>
-  <Setter Property="Template">
-    <Setter.Value>
-      <ControlTemplate TargetType="Button">
-        <!-- Fill and border as two layers, as PrimaryBtn (BasetuneTheme.xaml):
-             no lighter ring in the corners at 125/150% scaling. -->
-        <Grid>
-          <Border x:Name="fill" Background="{TemplateBinding Background}" CornerRadius="8"/>
-          <Border x:Name="bd" CornerRadius="8" BorderThickness="1" BorderBrush="Transparent"
-                  Padding="{TemplateBinding Padding}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          </Border>
-        </Grid>
-        <ControlTemplate.Triggers>
-          <Trigger Property="IsMouseOver" Value="True">
-            <Setter Property="Background" Value="$BgHover"/>
-          </Trigger>
-          <Trigger Property="IsEnabled" Value="False">
-            <Setter TargetName="fill" Property="Background" Value="$BgDisabled"/>
-            <Setter TargetName="bd" Property="BorderBrush" Value="$BorderDisabled"/>
-            <Setter Property="Foreground" Value="$FgDisabled"/>
-          </Trigger>
-        </ControlTemplate.Triggers>
-      </ControlTemplate>
-    </Setter.Value>
-  </Setter>
-</Style>
-"@
-    return [System.Windows.Markup.XamlReader]::Parse($xaml)
+# The Cancel of every strip button (Load, Compare, Export, Download): the
+# StripCancelBtn style of BasetuneTheme.xaml (a red line at the bottom), looked
+# up on first use (the theme must be loaded). Idle, each button
+# gets its own XAML style back (idleStyleCache).
+$script:styleCancel = $null
+function script:Initialize-ButtonStyles {
+    if ($script:styleCancel) { return }
+    $script:styleCancel = [System.Windows.Application]::Current.FindResource('StripCancelBtn')
 }
 
-$script:styleLoad   = $null
-$script:styleCancel = $null
+# Keep a button's XAML style the first time it is restyled, so idle can put
+# it back (Style=$null would lose the strip look and hover).
+function script:Save-IdleStyle {
+    param($Btn)
+    if (-not $script:idleStyleCache.ContainsKey($Btn.Name)) {
+        $script:idleStyleCache[$Btn.Name] = $Btn.Style
+    }
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Icon-only button mode toggle (Download + Export)
 #
 # While a job runs, a square icon button (Download, Export) becomes a red
-# Cancel with a white X and the tooltip "Cancel"; idle restores its XAML
-# SecBtn style and icon.
+# Cancel with an X (CancelAction* palette colours) and the tooltip "Cancel";
+# idle restores its XAML StripIconBtn style and icon.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Material Design "close" (X).
@@ -102,9 +73,9 @@ $script:iconCancelX = "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L
 
 # Idle icons for Set-IconButtonMode / New-DownloadButtonContent. Keep them in
 # sync with the inline Path Data in BasetuneUI.xaml:
-#   iconDownload -> btnOpenDownload (tray + down arrow)
+#   iconDownload -> btnOpenDownload (box with a list: dots and lines)
 #   iconExport   -> btnSourceExport / btnTargetExport (square with arrow leaving top-right)
-$script:iconDownload = "M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"
+$script:iconDownload = "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3Z M7.4,7.3A1.3,1.3 0 1,1 7.4,9.9A1.3,1.3 0 1,1 7.4,7.3Z M11.25,7.75H16.35A0.85,0.85 0 0,1 16.35,9.45H11.25A0.85,0.85 0 0,1 11.25,7.75Z M7.4,10.7A1.3,1.3 0 1,1 7.4,13.3A1.3,1.3 0 1,1 7.4,10.7Z M11.25,11.15H16.35A0.85,0.85 0 0,1 16.35,12.85H11.25A0.85,0.85 0 0,1 11.25,11.15Z M7.4,14.1A1.3,1.3 0 1,1 7.4,16.7A1.3,1.3 0 1,1 7.4,14.1Z M11.25,14.55H16.35A0.85,0.85 0 0,1 16.35,16.25H11.25A0.85,0.85 0 0,1 11.25,14.55Z"   # the View Report box with a list (dots and lines) cut out, see New-DownloadButtonContent
 $script:iconExport   = "M14,3V5H17.59L12.67,9.91L14.08,11.32L19,6.41V10H21V3M19,19H5V5H12V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V12H19V19Z"
 
 $script:idleStyleCache = @{}
@@ -112,7 +83,7 @@ $script:idleContentCache = @{}   # XAML icon content per button (keeps its glyph
 
 # Icon-only Viewbox content for a square button (idle icon or cancel X).
 # The Path Fill is bound to the Button's Foreground, as in the XAML icon
-# buttons: the SecBtn IsEnabled=False trigger greys the Foreground, and only
+# buttons: the StripIconBtn IsEnabled=False trigger greys the Foreground, and only
 # a bound Fill follows it (a fixed brush would stay dark when disabled).
 function script:New-IconOnlyContent {
     param([string]$IconPath, [int]$Size = 15, [string]$Margin = '0')
@@ -128,12 +99,12 @@ function script:New-IconOnlyContent {
     return [System.Windows.Markup.XamlReader]::Parse($xaml)
 }
 
-# Flip a square icon button between idle (XAML SecBtn style + action icon)
-# and cancel (red like Load in Cancel mode, white X, tooltip "Cancel").
+# Flip a strip icon button between idle (XAML StripIconBtn style + action icon)
+# and cancel (red like Load in Cancel mode, with an X, tooltip "Cancel").
 #
 #   Mode      — 'idle' or 'cancel'
 #   IdleIcon  — icon path for idle, used when no XAML content was cached
-#   IconSize  — Viewbox size (15 for 32-px buttons, 18 for 34-px buttons)
+#   IconSize  — Viewbox size (20, as all strip icons)
 function Set-IconButtonMode {
     param(
         [Parameter(Mandatory)]$Btn,
@@ -142,11 +113,7 @@ function Set-IconButtonMode {
         [int]$IconSize = 15
     )
 
-    # Cache the XAML SecBtn style on first touch (Style=$null would lose
-    # border + hover).
-    if (-not $script:idleStyleCache.ContainsKey($Btn.Name)) {
-        $script:idleStyleCache[$Btn.Name] = $Btn.Style
-    }
+    Save-IdleStyle $Btn
     # Same for the XAML icon content, so idle restores the exact glyph
     # (incl. its optical margin) instead of a rebuilt, centred one.
     if (-not $script:idleContentCache.ContainsKey($Btn.Name) -and $Btn.Tag -ne 'cancel') {
@@ -156,127 +123,66 @@ function Set-IconButtonMode {
     $Btn.Style = $script:idleStyleCache[$Btn.Name]
 
     if ($Mode -eq 'cancel') {
-        # Red background, white X: same look as Load while it runs.
-        if (-not $script:styleCancel) {
-            $script:styleLoad   = New-ButtonStyle '#1A6EF5' '#1662D9'
-            $script:styleCancel = New-ButtonStyle '#CC3333' '#AA2222' '#E08080' -BorderDisabled '#E08080'
-        }
+        # Red (CancelAction* palette brushes) with the X: same look as Load while it runs (a square
+        # strip segment: Export and Download sit in a strip).
+        Initialize-ButtonStyles
         $Btn.Style   = $script:styleCancel
-        # Size 16 (not 15) in the 32px button: the even leftover centres the X
-        # (15 leaves 17px, split 8/9). The X path is symmetric (5..19 of 24).
+        # Size 18, as all strip icons; in a 40px segment the even leftover (22)
+        # centres it. The X path is symmetric (5..19 of 24).
         # Margin top 2 moves it exactly 1px down, which looks centred.
-        $Btn.Content = New-IconOnlyContent $script:iconCancelX 16 '0,2,0,0'
+        $Btn.Content = New-IconOnlyContent $script:iconCancelX 18 '0,2,0,0'
         $Btn.Tag     = 'cancel'
         $Btn.ToolTip = 'Cancel'
         $Btn.IsEnabled = $true   # cancel must be clickable
     } else {
+        # No cached content: Download gets its own (New-DownloadButtonContent),
+        # the others the idle icon.
         $Btn.Content = if ($script:idleContentCache[$Btn.Name]) { $script:idleContentCache[$Btn.Name] }
+                       elseif ($Btn -eq $UI.btnOpenDownload) { New-DownloadButtonContent }
                        else { New-IconOnlyContent $IdleIcon $IconSize }
         $Btn.Tag     = $null
         # The caller sets the idle ToolTip again.
     }
+    # Download as Cancel hides the attention tooltip, idle may show it again.
+    if ($Btn -eq $UI.btnOpenDownload) { Update-AttentionTip }
 }
 
 function Set-LoadButtonMode {
+    # Load / Cancel in its tenant strip: red Cancel with the X, or its XAML
+    # style (StripAccentBtn) and content (play icon + "Load") back.
     param($btn, [string]$Mode)
-    if (-not $script:styleLoad) {
-        $script:styleLoad   = New-ButtonStyle '#1A6EF5' '#1662D9'
-        $script:styleCancel = New-ButtonStyle '#CC3333' '#AA2222' '#E08080' -BorderDisabled '#E08080'
-    }
-    $btn.Style = if ($Mode -eq 'cancel') { $script:styleCancel } else { $script:styleLoad }
-}
-
-# Compare button: a running compare can be cancelled, but the red Cancel only
-# shows after a short delay (compareCancelTimer, Initialize-BasetuneJobs), so a quick
-# compare doesn't flash red. The XAML style and content are kept on first use
-# and put back for 'idle'.
-function Set-CompareButtonMode {
-    param([ValidateSet('idle','cancel')][string]$Mode)
-    $btn = $UI.btnCompare
-    if (-not $btn) { return }
-    if (-not $script:compareIdle) {
-        $script:compareIdle = @{ Style = $btn.Style; Content = $btn.Content }
-    }
+    Save-IdleStyle $btn
+    Initialize-ButtonStyles
     if ($Mode -eq 'cancel') {
-        if ($btn.Tag -eq 'cancel') { return }
-        $btn.Content = New-ButtonContent $script:iconStop 'Cancel'
-        Set-LoadButtonMode $btn 'cancel'
-        $btn.Height    = 34          # PrimaryBtn height; the cancel style uses 32
-        $btn.Tag       = 'cancel'
-        $btn.IsEnabled = $true
+        if ($btn.Tag -ne 'cancel' -and -not $script:loadIdleContent.ContainsKey($btn.Name)) {
+            $script:loadIdleContent[$btn.Name] = $btn.Content
+        }
+        $btn.Content = New-ButtonContent $script:iconStop 'Cancel' 18 '-1.5,1,0,0'
+        $btn.Style   = $script:styleCancel
+        $btn.Tag     = 'cancel'
+        $btn.ToolTip = 'Cancel'
     } else {
-        if ($btn.Tag -ne 'cancel') { return }
-        $btn.Style   = $script:compareIdle.Style
-        $btn.Content = $script:compareIdle.Content
-        $btn.ClearValue([System.Windows.FrameworkElement]::HeightProperty)
-        $btn.Tag     = $null
+        if ($script:loadIdleContent.ContainsKey($btn.Name)) { $btn.Content = $script:loadIdleContent[$btn.Name] }
+        $btn.Style = $script:idleStyleCache[$btn.Name]
+        $btn.Tag   = $null
+        $btn.ToolTip = 'Load policies'   # the idle tooltip of the XAML
     }
 }
 
-# Button style with the XAML SecBtn shape (square, rounded corners) but a
-# coloured fill and border and a white foreground. Used for the Download
-# button when no definition files exist: same size as the other icon-bar
-# buttons, but it stands out. -Bg / -BgHover are palette keys (BasetuneWpf
-# palettes), read as DynamicResource, so the colour lives in one place and
-# follows a theme switch.
-function script:New-FilledIconButtonStyle {
-    param([string]$Bg = 'AttentionBrush', [string]$BgHover = 'AttentionHoverBrush')
-    $xaml = @"
-<Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-       TargetType="Button">
-  <Setter Property="Background"      Value="{DynamicResource $Bg}"/>
-  <Setter Property="Foreground"      Value="White"/>
-  <Setter Property="FocusVisualStyle" Value="{DynamicResource PrimaryFocusVisual}"/>
-  <Setter Property="BorderBrush"     Value="{DynamicResource $Bg}"/>
-  <Setter Property="BorderThickness" Value="1"/>
-  <Setter Property="Cursor"          Value="Hand"/>
-  <Setter Property="Template">
-    <Setter.Value>
-      <ControlTemplate TargetType="Button">
-        <!-- Fill and border as two layers (see New-ButtonStyle). -->
-        <Grid>
-          <Border Background="{TemplateBinding Background}" CornerRadius="8"/>
-          <Border BorderBrush="{TemplateBinding BorderBrush}"
-                  BorderThickness="{TemplateBinding BorderThickness}"
-                  CornerRadius="8" Padding="{TemplateBinding Padding}">
-            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          </Border>
-        </Grid>
-        <ControlTemplate.Triggers>
-          <Trigger Property="IsMouseOver" Value="True">
-            <Setter Property="Background"  Value="{DynamicResource $BgHover}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource $BgHover}"/>
-          </Trigger>
-          <Trigger Property="IsEnabled" Value="False">
-            <Setter Property="Background"  Value="{DynamicResource DisabledBgBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}"/>
-            <Setter Property="Foreground"  Value="{DynamicResource DisabledFgBrush}"/>
-            <Setter Property="Cursor"      Value="Arrow"/>
-          </Trigger>
-        </ControlTemplate.Triggers>
-      </ControlTemplate>
-    </Setter.Value>
-  </Setter>
-</Style>
-"@
-    return [System.Windows.Markup.XamlReader]::Parse($xaml)
-}
 
-$script:styleOrangeIcon = $null   # filled with AttentionBrush (orange, as on basetune.dev)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Download button look (icon-only square):
-#   $Missing = $false  definitions on disk: the XAML SecBtn style, like the
+#   $Missing = $false  definitions on disk: the XAML StripIconBtn style, like the
 #                      Config and Options buttons next to it.
-#   $Missing = $true   one or both definition files missing: orange fill,
-#                      white icon.
+#   $Missing = $true   one or both definition files missing: the action look
+#                      (StripAccentBtn: the blue line at the bottom).
 #
 # Called by Update-DownloadButton (BasetuneActions.psm1). Cancel mode
 # (Set-IconButtonMode) is separate; after a job this sets the idle look again.
 # ─────────────────────────────────────────────────────────────────────────────
 function Set-DownloadButtonStyle {
-    # Orange only when there are no definition files at all; otherwise the
+    # The action look only when there are no definition files at all; otherwise the
     # normal look. The tooltip is always "Download Definitions" (settings
     # without a definition are reported in the log at the end of a compare).
     param([bool]$Missing)
@@ -289,50 +195,131 @@ function Set-DownloadButtonStyle {
         $script:idleStyleCache[$btn.Name] = $btn.Style
     }
 
-    # Size and content are the same in every mode; only the style changes.
-    # The icon Fill is bound to the Foreground (New-DownloadButtonContent),
-    # so a new style recolours the icon too.
-    $btn.Width   = 34
+    # Size and content are the same in every mode; only the style changes
+    # (the width is that of its strip segment). The icon Fill is bound to the
+    # Foreground (New-DownloadButtonContent), so a new style recolours the
+    # icon too.
     $btn.Height  = 34
     $btn.Padding = [System.Windows.Thickness]::new(0)
     $btn.Content = New-DownloadButtonContent
 
     if ($Missing) {
-        # No definition files at all - orange, so it is clear where to start.
-        if (-not $script:styleOrangeIcon) {
-            $script:styleOrangeIcon = New-FilledIconButtonStyle -Bg 'AttentionBrush' -BgHover 'AttentionHoverBrush'
-        }
-        $btn.Style = $script:styleOrangeIcon
-        $btn.ToolTip = 'Download Definitions'
+        # No definition files at all - the action look, so it is clear where to start.
+        $btn.Style = $btn.FindResource('StripAccentBtn')
     } else {
-        # Definitions present - neutral icon-bar look
+        # Definitions present - neutral strip look
         $btn.Style = $script:idleStyleCache[$btn.Name]
-        $btn.ToolTip = 'Download Definitions'
     }
+    $btn.ToolTip = 'Download Definitions'
+    $script:definitionsMissing = $Missing
+    Update-AttentionTip
 }
 
-# Tenant Configuration button: always the normal icon-bar look and tooltip.
-# Called by Sync-MainTenantDropdowns (startup, after Tenant Configuration).
-# The disabled look during a job comes from the style itself.
-function Reset-ConfigButtonStyle {
+# Baseline Configuration button: the attention look (StripAttentionIconBtn: the
+# tint and a blue icon) while no tenant is configured, the first step the log
+# names ("Click the layers icon ..."); otherwise the normal strip look. Called by
+# Sync-MainTenantDropdowns (startup, after Baseline Configuration). The disabled
+# look during a job comes from the style itself.
+function Update-ConfigButtonStyle {
     $btn = $UI.btnOpenConfig
     if (-not $btn) { return }
     if (-not $script:idleStyleCache.ContainsKey($btn.Name)) {
         $script:idleStyleCache[$btn.Name] = $btn.Style
     }
-    $btn.Style = $script:idleStyleCache[$btn.Name]
-    $btn.ToolTip = 'Tenant Configuration'
+    $btn.Style = if (@($AppState.tenantStore.Keys).Count -eq 0) { $btn.FindResource('StripAttentionIconBtn') }
+                 else { $script:idleStyleCache[$btn.Name] }
+    $btn.ToolTip = 'Baseline Configuration'
+    Update-AttentionTip
+}
+
+# ── Attention tooltip — the first step, shown without hovering ──────────────
+# No tenant configured: the tooltip of Baseline Configuration (bottom left) stays
+# open; tenants but no definition files: the one of Download Definitions. Tenants
+# first: without a tenant there is nothing to download with. A ToolTip of its own
+# (not the button's, which closes when the mouse leaves), placed as the button
+# tooltips (Top, -4); the button's own tooltip is off while it shows, so hovering
+# never shows the text twice.
+# Shown only while the main window is active and not minimised (a popup stays on
+# top of other windows) and the button can be used (not disabled by a job, not
+# the red Cancel of a running download). A click anywhere in the window closes
+# it for good for that button ($script:attentionDismissed); when the next step
+# changes (a tenant added, definitions still missing) the other one shows.
+# Initialize-AttentionTip wires the window events; Update-ConfigButtonStyle /
+# Set-DownloadButtonStyle call it when the state changes.
+$script:definitionsMissing = $false
+$script:attentionTip       = $null
+$script:attentionDismissed = @{}
+function script:Get-AttentionTarget {
+    if (@($AppState.tenantStore.Keys).Count -eq 0) { return $UI.btnOpenConfig }
+    if ($script:definitionsMissing) { return $UI.btnOpenDownload }
+    return $null
+}
+function script:Update-AttentionTip {
+    $win = $UI.Window
+    if (-not $win) { return }
+    $target = Get-AttentionTarget
+    $show = $target -and -not $script:attentionDismissed[$target.Name] -and
+            $win.IsLoaded -and $win.IsActive -and $win.WindowState -ne 'Minimized' -and
+            $target.IsEnabled -and $target.IsVisible -and $target.Tag -ne 'cancel'
+    if (-not $script:attentionTip) {
+        $tip = [System.Windows.Controls.ToolTip]::new()
+        $style = $win.TryFindResource([System.Windows.Controls.ToolTip])
+        if ($style) { $tip.Style = $style }
+        $tip.Placement = [System.Windows.Controls.Primitives.PlacementMode]::Top
+        $tip.VerticalOffset = -4
+        $script:attentionTip = $tip
+    }
+    $tip = $script:attentionTip
+    # The button tooltips back on, except the one the attention tip stands in for.
+    foreach ($b in @($UI.btnOpenConfig, $UI.btnOpenDownload)) {
+        if ($b) { [System.Windows.Controls.ToolTipService]::SetIsEnabled($b, -not ($show -and $b -eq $target)) }
+    }
+    if (-not $show) { $tip.IsOpen = $false; return }
+    if ($tip.PlacementTarget -ne $target) { $tip.IsOpen = $false; $tip.PlacementTarget = $target }
+    $tip.Content = [string]$target.ToolTip
+    if ($tip.IsOpen) {
+        # Moved or resized window: the popup does not follow by itself; a change
+        # of offset makes it place itself again.
+        $tip.HorizontalOffset = if ($tip.HorizontalOffset -eq 0) { 0.01 } else { 0 }
+    } else {
+        $tip.IsOpen = $true
+    }
+}
+
+# Window and button events that can open, move or close the attention tooltip.
+# Called once from BasetuneUI.ps1, after the window is created.
+function Initialize-AttentionTip {
+    $win = $UI.Window
+    $win.Add_ContentRendered({ Update-AttentionTip })
+    $win.Add_Activated({ Update-AttentionTip })
+    $win.Add_Deactivated({ Update-AttentionTip })
+    $win.Add_StateChanged({ Update-AttentionTip })
+    $win.Add_LocationChanged({ Update-AttentionTip })
+    $win.Add_SizeChanged({ Update-AttentionTip })
+    $win.Add_Closing({ if ($script:attentionTip) { $script:attentionTip.IsOpen = $false } })
+    # Any click in the window (Preview: before a button handles it) dismisses
+    # the tooltip that shows now.
+    $win.Add_PreviewMouseDown({
+        $t = Get-AttentionTarget
+        if ($t -and $script:attentionTip -and $script:attentionTip.IsOpen) {
+            $script:attentionDismissed[$t.Name] = $true
+            Update-AttentionTip
+        }
+    })
+    foreach ($b in @($UI.btnOpenConfig, $UI.btnOpenDownload)) {
+        if ($b) { $b.Add_IsEnabledChanged({ Update-AttentionTip }) }
+    }
 }
 
 # Download button content as inline XAML, so the icon Fill binds to the
 # Button's Foreground (a RelativeSource binding built from PowerShell is
-# unreliable). Size 16 in the 32px button: the even leftover centres the
-# arrow; Margin top 2 moves it exactly 1px down (same as the XAML).
+# unreliable). The icon of the XAML (IconDownload in BasetuneTheme.xaml: the
+# box with a list cut out), size 20 as View Report.
 function script:New-DownloadButtonContent {
     $xaml = @"
 <Viewbox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-         Width="16" Height="16" Stretch="Uniform"
-         HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,2,0,0">
+         Width="20" Height="20" Stretch="Uniform"
+         HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,1,0,0">
   <Canvas Width="24" Height="24">
     <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
           Data="$script:iconDownload"/>
@@ -340,6 +327,36 @@ function script:New-DownloadButtonContent {
 </Viewbox>
 "@
     return [System.Windows.Markup.XamlReader]::Parse($xaml)
+}
+
+# Compare button: Cancel (StripCancelBtn: red, the X, "Cancel", tooltip
+# "Cancel") as soon as a compare runs (Start-Compare), Compare again when it is
+# done (Set-Busy). The XAML style and content are kept on first use and put
+# back for 'idle'.
+function Set-CompareButtonMode {
+    param([ValidateSet('idle','cancel')][string]$Mode)
+    $btn = $UI.btnCompare
+    if (-not $btn) { return }
+    if (-not $script:compareIdle) {
+        $script:compareIdle = @{ Style = $btn.Style; Content = $btn.Content }
+    }
+    # The height (34, the inside of its strip) is set in the XAML, a local
+    # value: it stays when the style changes.
+    if ($Mode -eq 'cancel') {
+        if ($btn.Tag -eq 'cancel') { return }
+        Initialize-ButtonStyles
+        $btn.Content   = New-ButtonContent $script:iconStop 'Cancel' 20 '-1.5,1,0,0'
+        $btn.Style     = $script:styleCancel
+        $btn.Tag       = 'cancel'
+        $btn.ToolTip   = 'Cancel'
+        $btn.IsEnabled = $true
+    } else {
+        if ($btn.Tag -ne 'cancel') { return }
+        $btn.Style   = $script:compareIdle.Style
+        $btn.Content = $script:compareIdle.Content
+        $btn.Tag     = $null
+        $btn.ToolTip = 'Compare Policies'   # the idle tooltip of the XAML
+    }
 }
 
 function Set-Busy {
@@ -391,32 +408,30 @@ function Set-Busy {
 
     if ($v) {
         # Tenant pickers and filter fields off (Update-ExportButtons turns the
-        # filters on again); per Side below, which button becomes Cancel.
+        # filters on again; during a load Enable-ListToolsDuringJob turns the
+        # other side's back on); per Side below, which button becomes Cancel.
         $UI.cmbSourceTenant.IsEnabled = $false
         $UI.cmbTargetTenant.IsEnabled = $false
         if ($UI.txtSourceFilter) { $UI.txtSourceFilter.IsEnabled = $false }
         if ($UI.txtTargetFilter) { $UI.txtTargetFilter.IsEnabled = $false }
-        # Tenant Configuration is off while a job runs: editing or removing a
-        # tenant (and rebuilding the tenant dropdowns when it closes) must not
-        # happen during a load / compare / export / download.
-        if ($UI.btnOpenConfig) { $UI.btnOpenConfig.IsEnabled = $false }
+        # Baseline Configuration (all three layers buttons) is off while a job
+        # runs: editing or removing a tenant (and rebuilding the tenant
+        # dropdowns when it closes) must not happen during a load / compare /
+        # export / download.
+        foreach ($cfgBtn in $UI.btnOpenConfig, $UI.btnSourceConfig, $UI.btnTargetConfig) { if ($cfgBtn) { $cfgBtn.IsEnabled = $false } }
 
         if ($Side -eq 'Source') {
             $UI.btnOpenDownload.IsEnabled = $false
             $UI.btnSourceExport.IsEnabled = $false
             $UI.btnTargetExport.IsEnabled = $false
             $UI.btnTargetLoad.IsEnabled  = $false
-            $UI.btnSourceLoad.Content    = New-ButtonContent $script:iconStop 'Cancel'
             Set-LoadButtonMode $UI.btnSourceLoad 'cancel'
-            $UI.btnSourceLoad.Tag       = 'cancel'
         } elseif ($Side -eq 'Target') {
             $UI.btnOpenDownload.IsEnabled = $false
             $UI.btnSourceExport.IsEnabled = $false
             $UI.btnTargetExport.IsEnabled = $false
             $UI.btnSourceLoad.IsEnabled  = $false
-            $UI.btnTargetLoad.Content    = New-ButtonContent $script:iconStop 'Cancel'
             Set-LoadButtonMode $UI.btnTargetLoad 'cancel'
-            $UI.btnTargetLoad.Tag       = 'cancel'
         } elseif ($Side -eq 'Download') {
             # Download stays clickable as a red Cancel; everything else off.
             $UI.btnSourceExport.IsEnabled = $false
@@ -424,7 +439,7 @@ function Set-Busy {
             $UI.btnSourceLoad.IsEnabled  = $false
             $UI.btnTargetLoad.IsEnabled  = $false
             Set-IconButtonMode -Btn $UI.btnOpenDownload -Mode 'cancel' `
-                -IdleIcon $script:iconDownload -IconSize 15
+                -IdleIcon $script:iconDownload -IconSize 20
         } elseif ($Side -eq 'SourceExport' -or $Side -eq 'TargetExport') {
             # Active Export side stays clickable as a red Cancel.
             $UI.btnOpenDownload.IsEnabled = $false
@@ -433,14 +448,15 @@ function Set-Busy {
             if ($Side -eq 'SourceExport') {
                 $UI.btnTargetExport.IsEnabled = $false
                 Set-IconButtonMode -Btn $UI.btnSourceExport -Mode 'cancel' `
-                    -IdleIcon $script:iconExport -IconSize 15
+                    -IdleIcon $script:iconExport -IconSize 16
             } else {
                 $UI.btnSourceExport.IsEnabled = $false
                 Set-IconButtonMode -Btn $UI.btnTargetExport -Mode 'cancel' `
-                    -IdleIcon $script:iconExport -IconSize 15
+                    -IdleIcon $script:iconExport -IconSize 16
             }
         } else {
-            # Compare or other — disable everything load-related, including Download.
+            # Compare (the one job without a side): everything load-related off;
+            # Compare itself becomes its Cancel (Set-CompareButtonMode, Start-Compare).
             $UI.btnOpenDownload.IsEnabled = $false
             $UI.btnSourceExport.IsEnabled = $false
             $UI.btnTargetExport.IsEnabled = $false
@@ -448,39 +464,33 @@ function Set-Busy {
             $UI.btnTargetLoad.IsEnabled  = $false
         }
     } else {
-        # Compare: stop the delayed-Cancel timer and turn a red Cancel back
-        # into Compare Policies (Update-Counts decides whether it's enabled).
-        if ($AppState.compareCancelTimer) { $AppState.compareCancelTimer.Stop() }
+        # Compare: a Cancel back into Compare (Update-Counts decides whether it is enabled).
         Set-CompareButtonMode 'idle'
 
         # Restore both Load buttons to normal state
-        $UI.btnSourceLoad.Content    = New-ButtonContent $script:iconSync 'Load'
         Set-LoadButtonMode $UI.btnSourceLoad 'load'
-        $UI.btnSourceLoad.Tag       = $null
         $UI.btnSourceLoad.IsEnabled = $true
-        $UI.btnTargetLoad.Content    = New-ButtonContent $script:iconSync 'Load'
         Set-LoadButtonMode $UI.btnTargetLoad 'load'
-        $UI.btnTargetLoad.Tag       = $null
         $UI.btnTargetLoad.IsEnabled = $true
         $UI.cmbSourceTenant.IsEnabled = $true
         $UI.cmbTargetTenant.IsEnabled = $true
-        if ($UI.btnOpenConfig) { $UI.btnOpenConfig.IsEnabled = $true }
+        foreach ($cfgBtn in $UI.btnOpenConfig, $UI.btnSourceConfig, $UI.btnTargetConfig) { if ($cfgBtn) { $cfgBtn.IsEnabled = $true } }
 
         # Download / Export icon buttons back to idle, only those in cancel
         # mode (Tag), so an untouched button keeps its ToolTip.
         if ($UI.btnOpenDownload.Tag -eq 'cancel') {
             Set-IconButtonMode -Btn $UI.btnOpenDownload -Mode 'idle' `
-                -IdleIcon $script:iconDownload -IconSize 15
+                -IdleIcon $script:iconDownload -IconSize 20
             $UI.btnOpenDownload.ToolTip = 'Download Definitions'
         }
         if ($UI.btnSourceExport.Tag -eq 'cancel') {
             Set-IconButtonMode -Btn $UI.btnSourceExport -Mode 'idle' `
-                -IdleIcon $script:iconExport -IconSize 15
+                -IdleIcon $script:iconExport -IconSize 16
             $UI.btnSourceExport.ToolTip = 'Export Policies'
         }
         if ($UI.btnTargetExport.Tag -eq 'cancel') {
             Set-IconButtonMode -Btn $UI.btnTargetExport -Mode 'idle' `
-                -IdleIcon $script:iconExport -IconSize 15
+                -IdleIcon $script:iconExport -IconSize 16
             $UI.btnTargetExport.ToolTip = 'Export Policies'
         }
 
@@ -544,8 +554,10 @@ Export-ModuleMember -Function @(
     'Set-IconButtonMode',
     'Set-LoadButtonMode',
     'Set-CompareButtonMode',
+
     'Set-DownloadButtonStyle',
-    'Reset-ConfigButtonStyle',
+    'Update-ConfigButtonStyle',
+    'Initialize-AttentionTip',
     'Set-Busy',
     'Update-ExportButtons'
 )

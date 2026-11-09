@@ -16,7 +16,7 @@ $script:AppState = (Get-BasetuneContext).State
 #      (System.Windows.Forms is loaded by BasetuneUI.ps1).
 #
 #   InitialPath — optional start folder (ignored if it does not exist)
-#   Owner       — the dialog it is opened from (Tenant Configuration / Options):
+#   Owner       — the dialog it is opened from (Baseline Configuration / Options):
 #                 a picker owned by the main window would re-enable the main
 #                 window behind the still-open dialog. Default: main window.
 function Show-FolderBrowser {
@@ -55,6 +55,9 @@ function Show-FolderBrowser {
 #   Pixels (log): $Lines lines of $LinePx pixels per notch, smooth.
 #   -PerItem (policy lists, VirtualizingPanel.ScrollUnit="Item" in the XAML):
 #     whole rows only; small touchpad events add up to a whole row.
+#   -PerLine (the log): one whole line of $LinePx per notch, small touchpad
+#     events add up to a line; the offset kept on a line, so no line is ever
+#     shown cut in half (collapsed one line, expanded seven).
 # Works on a TextBox (log) and a ListBox: the ScrollViewer is looked up inside
 # the element, then above it, once (cached).
 function Set-SlowScroll {
@@ -62,18 +65,22 @@ function Set-SlowScroll {
         [Parameter(Mandatory)][System.Windows.UIElement]$Element,
         [int]$Lines = 3,
         [double]$LinePx = 16,
-        [switch]$PerItem
+        [switch]$PerItem,
+        [switch]$PerLine
     )
     # Per-element state shared with the closure: cached ScrollViewer, pixels
     # per Delta unit, Delta per row, Delta not yet turned into rows.
     $state = @{ Sv = $null; Px = ([math]::Max(1, $Lines) * $LinePx / 120.0)
-                PerItem = [bool]$PerItem; DeltaPerItem = (120.0 / [math]::Max(1, $Lines)); Acc = 0.0 }
+                PerItem = [bool]$PerItem; PerLine = [bool]$PerLine; DeltaPerItem = (120.0 / [math]::Max(1, $Lines)); Acc = 0.0 }
 
     $Element.Add_PreviewMouseWheel({
         param($sender, $e)
 
         # Find the ScrollViewer once: inside first (ListBox), then above (TextBox).
+        # Found again when the cached one left the tree: a DPI or theme change
+        # can rebuild the template, and a stale ScrollViewer would swallow the wheel.
         $sv = $state.Sv
+        if ($sv -and -not ($sender.IsAncestorOf($sv) -or $sv.IsAncestorOf($sender))) { $sv = $null; $state.Sv = $null }
         if (-not $sv) {
         $queue = [System.Collections.Generic.Queue[System.Windows.DependencyObject]]::new()
         $queue.Enqueue($sender)
@@ -97,7 +104,18 @@ function Set-SlowScroll {
         $state.Sv = $sv
         }
 
-        if ($state.PerItem) {
+        if ($state.PerLine) {
+            # One whole line per notch (the log); small touchpad events add up
+            # to a line; the offset stays on a line.
+            if (($state.Acc -gt 0 -and $e.Delta -lt 0) -or ($state.Acc -lt 0 -and $e.Delta -gt 0)) { $state.Acc = 0.0 }
+            $state.Acc += $e.Delta
+            $lines = [math]::Truncate($state.Acc / 120.0)
+            if ($lines -ne 0) {
+                $line = [math]::Round($sv.VerticalOffset / $LinePx)
+                $sv.ScrollToVerticalOffset(($line - $lines) * $LinePx)
+                $state.Acc -= $lines * 120.0
+            }
+        } elseif ($state.PerItem) {
             # Whole rows (offset in items). The remainder is kept for the next
             # event and reset when the direction changes.
             if (($state.Acc -gt 0 -and $e.Delta -lt 0) -or ($state.Acc -lt 0 -and $e.Delta -gt 0)) { $state.Acc = 0.0 }
@@ -116,7 +134,7 @@ function Set-SlowScroll {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Theme (light / dark)
+# Theme (light / dark / basetune)
 #
 # Shared styles (Xaml\BasetuneTheme.xaml) are loaded once into
 # Application.Current.Resources and use colours by key (DynamicResource). The
@@ -127,83 +145,134 @@ function Set-SlowScroll {
 # container only (OnExplicitShutdown: closing a dialog never ends it).
 # ─────────────────────────────────────────────────────────────────────────────
 $script:ThemePalettes = @{
+    # Material Design 3 roles from one blue seed (#1A6EF5): greys tinted with
+    # the seed hue (dark: a little more blue than the MD3 tones; surface
+    # containers instead of white overlays), solid
+    # colours except the hover tints. Both themes have the same accent, the
+    # house blue (#0072CE, #0062B1 on hover; calmer than tone 40),
+    # and the Material error red for Cancel.
+    # Disabled (both themes): dimmed text and icons (DisabledFgBrush); light
+    # uses a readable bluish grey instead of the MD3 grey-out.
     light = [ordered]@{
-        BgBrush               = '#EBF3FB'
+        BgBrush               = '#EEF4FB'
         CardBrush             = '#FFFFFF'
-        CardBorderBrush       = '#DCE6F1'
-        TextBrush             = '#0E1B3D'
-        SubTextBrush          = '#4A5873'
-        MutedBrush            = '#4A5873'
-        HintBrush             = '#667389'
-        InputBgBrush          = '#F4F7FB'
-        InputBorderBrush      = '#C5D0DF'
-        AccentBrush           = '#1A6EF5'
-        AccentHoverBrush      = '#1662D9'
-        AccentSoftBrush       = '#1F1A6EF5'
-        HoverBrush            = '#0F1A6EF5'
-        DisabledBgBrush       = '#E9EEF5'
+        CardBorderBrush       = '#E1E7EF'
+        TextBrush             = '#191C20'
+        SubTextBrush          = '#43474E'
+        MutedBrush            = '#43474E'
+        HintBrush             = '#73777F'
+        # A light blue window (#EEF4FB) with white
+        # cards; inputs a flat light grey fill.
+        InputBgBrush          = '#F2F4F7'
+        InputBorderBrush      = '#C3C7CF'
+        AccentBrush           = '#0072CE'
+        AccentSoftBrush       = '#0D0072CE'   # selected / focused row: 5%, lighter than the hover
+        # Mouse-over on an active segment (AccentSoftBrush): about twice the tint.
+        AccentSoftHoverBrush  = '#380072CE'
+        HoverBrush            = '#140072CE'   # mouse-over: 8%
+        CheckTickBrush        = '#FFFFFF'
+        # Action segments (StripAccentBtn: Load, Compare, the layers buttons): a
+        # soft blue tint with blue text and icon and a 1px blue line on the card
+        # edge, as in dark (a filled blue was too dominant on the light page);
+        # a stronger tint on hover. Cancel the same in red.
+        ActionBgBrush            = '#1F0072CE'
+        ActionFgBrush            = '#0072CE'
+        ActionHoverBgBrush       = '#380072CE'
+        ActionHoverFgBrush       = '#0062B1'
+        CancelActionBgBrush      = '#1FBA1A1A'
+        CancelActionFgBrush      = '#BA1A1A'
+        CancelActionHoverBgBrush = '#38BA1A1A'
+        CancelActionHoverFgBrush = '#A41717'
+        ActionLineBrush          = '#0072CE'
+        CancelActionLineBrush    = '#BA1A1A'
+        # View Report / View Details: no tint and no line, blue text and icon; the
+        # hover tint on mouse-over. Compare (tint + line) stays the main action.
+        SecondaryActionBgBrush      = '#00FFFFFF'
+        SecondaryActionFgBrush      = '#0072CE'
+        SecondaryActionHoverBgBrush = '#140072CE'
+        SecondaryActionHoverFgBrush = '#0062B1'
+        SecondaryActionLineBrush    = '#00000000'
+        # The layers button at the bottom left (StripLayersBtn): as the icon
+        # buttons (no tint, grey icon; the hover tint and a blue icon on mouse-over).
+        LayersBgBrush            = '#00FFFFFF'
+        LayersFgBrush            = '#43474E'
+        LayersHoverBgBrush       = '#140072CE'
+        LayersHoverFgBrush       = '#0072CE'
         DisabledFgBrush       = '#667389'
-        DisabledBorderBrush   = '#C8D2E0'
-        IconFgBrush           = '#0E1B3D'
-        SecBtnFgBrush         = '#1C2B4D'
-        SecBtnBgBrush         = '#F4F7FB'
-        SectionLabelBrush     = '#1A6EF5'
-        ConsoleBgBrush        = '#FFFFFF'
-        ConsoleFgBrush        = '#1C2B4D'
-        ConsoleBtnBgBrush     = '#F4F7FB'
-        ConsoleBtnBorderBrush = '#C5D0DF'
-        ConsoleIconFgBrush    = '#0E1B3D'
-        ScrollThumbBrush      = '#A9B6CB'
+        IconFgBrush           = '#43474E'
+        SecBtnFgBrush         = '#191C20'
+        SectionLabelBrush     = '#0072CE'
+        ConsoleBgBrush        = '#F8F9FB'   # log: lighter than the grey labels (#F2F4F7), a step off the white card
+        ConsoleFgBrush        = '#191C20'
+        ScrollThumbBrush      = '#C3C7CF'
         PopupBgBrush          = '#FFFFFF'
-        PopupBorderBrush      = '#DCE6F1'
+        PopupBorderBrush      = '#D8DEE6'
         WarnBrush             = '#B85C00'
-        # Download button when definition files are missing (orange fill, white
-        # icon); the same in both themes.
-        AttentionBrush        = '#F0A340'
-        AttentionHoverBrush   = '#D98E2B'
-        ErrorBrush            = '#E03333'
-        CaptionHoverBrush     = '#14000000'
-        CaptionPressedBrush   = '#24000000'
+        ErrorBrush            = '#BA1A1A'
+        CaptionHoverBrush     = '#14191C20'
+        CaptionPressedBrush   = '#1F191C20'
     }
     dark = [ordered]@{
-        BgBrush               = '#0F1115'
-        CardBrush             = '#1A1D23'
-        CardBorderBrush       = '#2D323A'
-        TextBrush             = '#F0F2F5'
-        SubTextBrush          = '#A0A6B1'
-        MutedBrush            = '#AEB4BE'
-        HintBrush             = '#8B929C'
-        InputBgBrush          = '#22262E'
-        InputBorderBrush      = '#343A44'
-        AccentBrush           = '#1A6EF5'
-        AccentHoverBrush      = '#1662D9'
-        AccentSoftBrush       = '#2E1A6EF5'
-        HoverBrush            = '#1A1A6EF5'
-        DisabledBgBrush       = '#2A2F37'
-        DisabledFgBrush       = '#A0A6B1'
-        DisabledBorderBrush   = '#454C58'
-        IconFgBrush           = '#E6E8EB'
-        SecBtnFgBrush         = '#D0D4DA'
-        SecBtnBgBrush         = '#1A1D23'
-        SectionLabelBrush     = '#1A6EF5'
-        ConsoleBgBrush        = '#0B0D11'
-        ConsoleFgBrush        = '#C9D1D9'
-        ConsoleBtnBgBrush     = '#1D222B'
-        ConsoleBtnBorderBrush = '#2D333D'
-        ConsoleIconFgBrush    = '#C9D1D9'
-        ScrollThumbBrush      = '#3A404A'
-        PopupBgBrush          = '#1F232A'
-        PopupBorderBrush      = '#343A44'
+        BgBrush               = '#0F1219'
+        CardBrush             = '#1B1F27'
+        CardBorderBrush       = '#252A33'
+        TextBrush             = '#E1E4E8'
+        SubTextBrush          = '#B8C5D0'
+        MutedBrush            = '#B8C5D0'
+        HintBrush             = '#8D99A6'
+        InputBgBrush          = '#252A33'
+        InputBorderBrush      = '#404652'
+        # The blue and red of the light theme (accent, action buttons,
+        # Cancel, ticks); the tints at the dark alphas (8% / 16%). Main text
+        # #E1E4E8 (a soft white: brighter was too harsh); the other text and
+        # icons a muted blue-grey #B8C5D0 (about 9:1 on a card), hints #8D99A6,
+        # so the names stand out (as Reddit's dark mode). The labels, the line
+        # of an action segment and its mouse-over text the house blue #0072CE,
+        # as in light (3.4:1 on a card).
+        AccentBrush           = '#0072CE'
+        AccentSoftBrush       = '#290072CE'
+        AccentSoftHoverBrush  = '#520072CE'
+        HoverBrush            = '#140072CE'
+        CheckTickBrush        = '#FFFFFF'
+        # Action segments: the hover tint with the neutral icon colour; on
+        # hover accent text. Cancel the same with red text on hover.
+        ActionBgBrush            = '#140072CE'
+        ActionFgBrush            = '#B8C5D0'
+        ActionHoverBgBrush       = '#140072CE'
+        ActionHoverFgBrush       = '#0072CE'
+        CancelActionBgBrush      = '#140072CE'
+        CancelActionFgBrush      = '#B8C5D0'
+        CancelActionHoverBgBrush = '#140072CE'
+        CancelActionHoverFgBrush = '#BA1A1A'
+        ActionLineBrush          = '#0072CE'     # the 1px blue line of an action segment
+        CancelActionLineBrush    = '#BA1A1A'
+        # View Report / View Details: as the other action segments.
+        SecondaryActionBgBrush      = '#140072CE'
+        SecondaryActionFgBrush      = '#B8C5D0'
+        SecondaryActionHoverBgBrush = '#140072CE'
+        SecondaryActionHoverFgBrush = '#0072CE'
+        SecondaryActionLineBrush    = '#0072CE'     # as ActionLineBrush
+        # The layers button at the bottom left (StripLayersBtn): the action tint, as Load and Compare.
+        LayersBgBrush            = '#140072CE'
+        LayersFgBrush            = '#B8C5D0'
+        LayersHoverBgBrush       = '#140072CE'
+        LayersHoverFgBrush       = '#0072CE'
+        DisabledFgBrush       = '#676A6E'
+        IconFgBrush           = '#B8C5D0'
+        SecBtnFgBrush         = '#E1E4E8'
+        SectionLabelBrush     = '#0072CE'
+        ConsoleBgBrush        = '#0A0D13'
+        ConsoleFgBrush        = '#B8C5D0'
+        ScrollThumbBrush      = '#404652'
+        PopupBgBrush          = '#30353F'
+        PopupBorderBrush      = '#404652'
         WarnBrush             = '#F0A340'
-        # Download button when definition files are missing (orange fill, white
-        # icon); the same in both themes.
-        AttentionBrush        = '#F0A340'
-        AttentionHoverBrush   = '#D98E2B'
-        ErrorBrush            = '#F85149'
-        CaptionHoverBrush     = '#1AFFFFFF'
-        CaptionPressedBrush   = '#2EFFFFFF'
+        ErrorBrush            = '#E5534B'   # a calm red, 5.3:1 on the log (the pale #F2B8B5 read as pink)
+        CaptionHoverBrush     = '#14E1E2E8'
+        CaptionPressedBrush   = '#1FE1E2E8'
     }
 }
+
 $script:CurrentTheme   = 'dark'      # default until Options.json is read
 $script:ThemeStyles    = $null     # ResourceDictionary from BasetuneTheme.xaml
 $script:ThemeColors    = $null     # ResourceDictionary with the palette brushes
@@ -241,15 +310,42 @@ function Initialize-BasetuneTheme {
     $app.Resources.MergedDictionaries.Clear()
     $app.Resources.MergedDictionaries.Add($script:ThemeColors)
     $app.Resources.MergedDictionaries.Add($script:ThemeStyles)
+
+    # Open dropdown lists scroll one item per mouse notch, as the policy lists
+    # (Set-SlowScroll -PerItem -Lines 1): a class handler on every ComboBoxItem,
+    # so it holds for all dropdowns of all windows. The popup's ScrollViewer
+    # scrolls in items (CanContentScroll in the templates); small touchpad
+    # events add up to a whole item.
+    if (-not $script:ComboWheelHooked) {
+        $script:ComboWheelHooked = $true
+        $script:ComboWheelAcc = 0.0
+        [System.Windows.EventManager]::RegisterClassHandler([System.Windows.Controls.ComboBoxItem],
+            [System.Windows.UIElement]::PreviewMouseWheelEvent,
+            [System.Windows.Input.MouseWheelEventHandler]{
+                param($s, $e)
+                $sv = $s
+                while ($sv -and $sv -isnot [System.Windows.Controls.ScrollViewer]) { $sv = [System.Windows.Media.VisualTreeHelper]::GetParent($sv) }
+                if (-not $sv) { return }
+                if (($script:ComboWheelAcc -gt 0 -and $e.Delta -lt 0) -or ($script:ComboWheelAcc -lt 0 -and $e.Delta -gt 0)) { $script:ComboWheelAcc = 0.0 }
+                $script:ComboWheelAcc += $e.Delta
+                $rows = [math]::Truncate($script:ComboWheelAcc / 120.0)
+                if ($rows -ne 0) {
+                    $sv.ScrollToVerticalOffset($sv.VerticalOffset - $rows)
+                    $script:ComboWheelAcc -= $rows * 120.0
+                }
+                $e.Handled = $true
+            })
+    }
 }
 
 function Get-BasetuneTheme { return $script:CurrentTheme }
 
-# Switch every open window to 'light' or 'dark' (anything else: dark). Safe
-# before any window exists.
+# Switch every open window to 'light' or 'dark' (anything else: dark, the
+# default). Safe before any window exists.
 function Set-BasetuneTheme {
     param([string]$Theme)
-    $Theme = if ("$Theme".Trim().ToLower() -eq 'light') { 'light' } else { 'dark' }
+    $Theme = "$Theme".Trim().ToLower()
+    if ($Theme -notin @('light', 'dark')) { $Theme = 'dark' }
     Initialize-BasetuneTheme
 
     $app = [System.Windows.Application]::Current
@@ -282,7 +378,7 @@ function script:Set-WindowTitleBarTheme {
     try {
         $hwnd = [System.Windows.Interop.WindowInteropHelper]::new($Window).Handle
         if ($hwnd -eq [IntPtr]::Zero) { return }   # not shown yet; SourceInitialized handles it
-        $on = if ($script:CurrentTheme -eq 'dark') { 1 } else { 0 }
+        $on = if ($script:CurrentTheme -ne 'light') { 1 } else { 0 }   # dark
         if ([Basetune.DwmTheme]::DwmSetWindowAttribute($hwnd, 20, [ref]$on, 4) -ne 0) {
             [void][Basetune.DwmTheme]::DwmSetWindowAttribute($hwnd, 19, [ref]$on, 4)
         }
@@ -299,7 +395,7 @@ function script:Register-ThemedWindow {
 }
 
 # ── Dialogs: own title bar + fixed size ──────────────────────────────────────
-# Tenant Configuration, Options and Download Definitions use WindowChrome
+# Baseline Configuration, Options and Download Definitions use WindowChrome
 # (see their XAML): no invisible Windows border, so a Dell Display Manager
 # zone beside a monitor with other scaling does not enlarge them. DDM also
 # sizes a window to its zone: when something outside sets the size (WPF then
@@ -324,6 +420,33 @@ function Initialize-DialogChrome {
             }
             if ($script:DialogIcon) { $img.Source = $script:DialogIcon }
         } catch {}
+    }
+
+    # Strips (stripButtons: Save / Download | Close; stripFields: the fields
+    # as label | value rows; stripTenant: the tenant strip), the strip style of the main window: clipped to
+    # their rounded card (radius 8 - 1px border = 7), so the square tint of a
+    # segment never shows past the corners; 1px taller for the line of an
+    # action segment on the bottom edge (StripBtn). stripButtons is the bottom
+    # of the card (a line above it): only its bottom corners are rounded, the
+    # top ones stay square (a rounded top cut the tint of Close). stripTenant
+    # is the top of the card (a line under it): only its top corners rounded.
+    foreach ($stripName in 'stripButtons', 'stripFields', 'stripTenant') {
+        $strip = Find-InTree -Root $Dialog -Name $stripName
+        if (-not $strip) { continue }
+        $strip.Add_SizeChanged({
+            param($s, $e)
+            $w = $e.NewSize.Width; $h = $e.NewSize.Height + 1
+            $rounded = [System.Windows.Media.RectangleGeometry]::new([System.Windows.Rect]::new(0, 0, $w, $h), 7, 7)
+            if ($s.Name -eq 'stripButtons') {
+                $top = [System.Windows.Media.RectangleGeometry]::new([System.Windows.Rect]::new(0, 0, $w, [math]::Max(0, $h - 7)))
+                $s.Clip = [System.Windows.Media.CombinedGeometry]::new([System.Windows.Media.GeometryCombineMode]::Union, $rounded, $top)
+            } elseif ($s.Name -eq 'stripTenant') {
+                $bottom = [System.Windows.Media.RectangleGeometry]::new([System.Windows.Rect]::new(0, [math]::Min(7, $h), $w, [math]::Max(0, $h - 7)))
+                $s.Clip = [System.Windows.Media.CombinedGeometry]::new([System.Windows.Media.GeometryCombineMode]::Union, $rounded, $bottom)
+            } else {
+                $s.Clip = $rounded
+            }
+        })
     }
 
     # Windows 11: rounded corners (DWMWA_WINDOW_CORNER_PREFERENCE = 33, round = 2).
@@ -393,7 +516,7 @@ function Import-Xaml {
     }
 
     # Shared styles + colour palette must exist before the window is parsed:
-    # the windows reference Card, PrimaryBtn, ... with StaticResource, which
+    # the windows reference Card, StripBtn, ... with StaticResource, which
     # falls back to Application.Current.Resources.
     Initialize-BasetuneTheme
 

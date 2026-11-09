@@ -155,7 +155,7 @@ function Update-Counts {
     }
     Set-CountLabel -Side 'Source' -Text (& $fmt $UI.lstSource $AppState.sourceItems $srcChecked)
     Set-CountLabel -Side 'Target' -Text (& $fmt $UI.lstTarget $AppState.targetItems $tgtChecked)
-    # While searching, a filter icon left of the counter says it counts only
+    # While searching, a dot left of the counter says it counts only
     # the search results.
     foreach ($c in @(@($UI.icoSourceFilter, $UI.lstSource, $AppState.sourceItems), @($UI.icoTargetFilter, $UI.lstTarget, $AppState.targetItems))) {
         if (-not $c[0]) { continue }
@@ -200,13 +200,13 @@ function Reset-Side {
         Set-CountLabel -Side 'Target' -Text ''
         $UI.lstTarget.ItemsSource = $AppState.targetItems
     }
-    Update-EmptyState -Side $Side -Force     # "Ready to load policies" (or nothing without a tenant)
+    Update-EmptyState -Side $Side -Force     # "Ready to load source/target policies" (or nothing without a tenant)
     Set-ListSort -Side $Side -Reset          # headers back to Policy A-Z, no Platform column
     # A load filter typed before loading is kept (it applies to the next Load).
     # A search term in the loaded list is cleared: that list is gone.
     $box  = if ($Side -eq 'Source') { $UI.txtSourceFilter }     else { $UI.txtTargetFilter }
     $hint = if ($Side -eq 'Source') { $UI.txtSourceFilterHint } else { $UI.txtTargetFilterHint }
-    $wasSearch = ($hint -and $hint.Text -eq 'Filter policies')
+    $wasSearch = ($AppState.filterMode -and $AppState.filterMode[$Side] -eq 'Search')
     # So is an unchanged load filter that gave "No policies match the selected filters".
     $wasNoMatch = ($box -and $box.Text -and $AppState.noMatchLoadFilter -and
                    $AppState.noMatchLoadFilter[$Side] -and $box.Text -eq $AppState.noMatchLoadFilter[$Side])
@@ -214,35 +214,86 @@ function Reset-Side {
     if ($box -and ($wasSearch -or $wasNoMatch)) { $box.Text = '' }
     if ($hint -and $box -and -not $box.IsFocused -and -not $box.Text) { $hint.Visibility = 'Visible' }
     Set-FilterMode -Side $Side -Mode 'Filter'
+    Set-CountToolTip -Side $Side -Filter ''
     Update-Counts
     $UI.btnOpenReport.IsEnabled = $false
     $AppState.reportSelectionKey      = $null
 }
 
 # ── Name filter field: 'Filter' before a load, 'Search' once policies are loaded ──
-# Before loading the text is the load filter ("Filter by name"); after a load
-# it searches the loaded list ("Filter policies"). Load always uses the field
-# as its filter.
+# Before loading the text is the load filter (funnel icon, "Filter by name");
+# after a load it searches the loaded list (magnifier, "Search policies").
+# Load always uses the field as its filter. The mode per side is
+# $AppState.filterMode.
 function Set-FilterMode {
     param([string]$Side, [ValidateSet('Filter','Search')][string]$Mode)
-    $box  = if ($Side -eq 'Source') { $UI.txtSourceFilter }     else { $UI.txtTargetFilter }
-    $hint = if ($Side -eq 'Source') { $UI.txtSourceFilterHint } else { $UI.txtTargetFilterHint }
-    if ($Mode -eq 'Search') {
-        if ($hint) { $hint.Text = 'Filter policies' }
-        if ($box)  { $box.ToolTip = 'Filter the loaded policies by name' }
+    if ($AppState.filterMode) { $AppState.filterMode[$Side] = $Mode }
+    $box = if ($Side -eq 'Source') { $UI.txtSourceFilter } else { $UI.txtTargetFilter }
+    if ($box) {
+        $box.ToolTip = if ($Mode -eq 'Search') { 'Search the loaded policies by name' } else { 'Filter policies by name before loading' }
+    }
+    Update-FilterIcon -Side $Side
+    Update-LoadIcon -Side $Side
+}
+
+# Tooltip of the count row ("x / y"): only the name filter of the last load
+# when it had one (otherwise what the numbers are), so it is clear the list is that subset of the tenant. Set
+# after a load (Start-Load), back to the plain text with the list (Reset-Side).
+function Set-CountToolTip {
+    param([string]$Side, [string]$Filter)
+    $grid = if ($Side -eq 'Source') { $UI.gridSourceCount } else { $UI.gridTargetCount }
+    if (-not $grid) { return }
+    $grid.ToolTip = if ($Filter) { "Loaded with name filter '$Filter'" }
+                    else { 'Selected / total (while searching: of the search results)' }
+}
+
+# Icon of the Load button: the play triangle before a load (Filter mode), the
+# reload arrows once policies are loaded (Search mode: Load loads them again).
+# The play triangle is 20 with StripPlayIconMargin (off centre in its box, see
+# Set-StripMode); the arrows 18 with StripReloadIconMargin (the label stays put). The Cancel
+# content of a running load is separate (Set-LoadButtonMode keeps this content).
+function Update-LoadIcon {
+    param([string]$Side)
+    $vb   = if ($Side -eq 'Source') { $UI.vbSourceLoadIcon }   else { $UI.vbTargetLoadIcon }
+    $path = if ($Side -eq 'Source') { $UI.pathSourceLoadIcon } else { $UI.pathTargetLoadIcon }
+    if (-not $vb -or -not $path) { return }
+    $loaded = $AppState.filterMode -and $AppState.filterMode[$Side] -eq 'Search'
+    if ($loaded) {
+        $geo = $path.TryFindResource('GeoReload')
+        if ($geo) { $path.Data = $geo }
+        $vb.Width = 18; $vb.Height = 18
+        $vb.SetResourceReference([System.Windows.FrameworkElement]::MarginProperty, 'StripReloadIconMargin')
     } else {
-        if ($hint) { $hint.Text = 'Filter by name' }
-        if ($box)  { $box.ToolTip = 'Filter policies by name before loading' }
+        $path.ClearValue([System.Windows.Shapes.Path]::DataProperty)   # the play triangle of its style (IconPlay)
+        $vb.Width = 20; $vb.Height = 20
+        $vb.SetResourceReference([System.Windows.FrameworkElement]::MarginProperty, 'StripPlayIconMargin')
+    }
+}
+
+# Icon and hint text of the name filter field: the magnifier and "Search
+# policies" in Search mode, the funnel and "Filter by name" in Filter mode.
+function Update-FilterIcon {
+    param([string]$Side)
+    $hint = if ($Side -eq 'Source') { $UI.txtSourceFilterHint }  else { $UI.txtTargetFilterHint }
+    $icon = if ($Side -eq 'Source') { $UI.pathSourceFilterIcon } else { $UI.pathTargetFilterIcon }
+    $search = $AppState.filterMode -and $AppState.filterMode[$Side] -eq 'Search'
+    if ($hint) { $hint.Text = if ($search) { 'Search policies' } else { 'Filter by name' } }
+    if ($icon) {
+        $key = if ($search) { 'GeoSearch' } else { 'GeoFunnel' }
+        $geo = $icon.TryFindResource($key)
+        if ($geo) { $icon.Data = $geo }
     }
 }
 
 # ── Message in the middle of an empty policy card ────────────────────────────
-# Empty list + a tenant: "Ready to load policies"; no tenant configured:
+# Empty list + a tenant: "Ready to load source policies" / "... target
+# policies" (the side in the text, so the empty cards say which is which);
+# no tenant configured:
 # "Configure a tenant to get started"; a load on that side: "Loading policies"
 # / "Loading policies with name filter 'x'". A "No ... matching 'x'" message from
 # a load that found nothing is kept, unless -Force (tenant switch, typing in
 # that side's filter).
-$script:ReadyText    = 'Ready to load policies'
+$script:ReadyText    = @{ Source = 'Ready to load source policies'; Target = 'Ready to load target policies' }
 $script:NoTenantText = 'Configure a tenant to get started'   # clickable (XAML trigger on this exact text + click handler in BasetuneUI.ps1)
 function Get-LoadingCardText {
     param([string]$Filter)
@@ -254,11 +305,11 @@ function Update-EmptyState {
     $cmb   = if ($Side -eq 'Source') { $UI.cmbSourceTenant }  else { $UI.cmbTargetTenant }
     if ($Side -eq 'Source') { $items = $AppState.sourceItems } else { $items = $AppState.targetItems }
     if (-not $nm -or $items.Count -gt 0) { return }   # loaded list: Update-SelectionRow handles it
-    if (-not $Force -and $nm.Text -and $nm.Text -ne $script:ReadyText -and $nm.Text -ne $script:NoTenantText) { return }
+    if (-not $Force -and $nm.Text -and $nm.Text -ne $script:ReadyText[$Side] -and $nm.Text -ne $script:NoTenantText) { return }
     $job = $AppState.CurrentJob
     $loadingHere = $job -and $job.Type -eq 'Load' -and $job.Side -eq $Side
     $nm.Text = if ($loadingHere)                         { Get-LoadingCardText $job.LoadFilter }
-               elseif ($cmb -and $cmb.SelectedItem)      { $script:ReadyText }
+               elseif ($cmb -and $cmb.SelectedItem)      { $script:ReadyText[$Side] }
                else                                      { $script:NoTenantText }
 }
 
@@ -275,7 +326,7 @@ function Update-ListFilter {
     if ($Side -eq 'Source') { $items = $AppState.sourceItems } else { $items = $AppState.targetItems }
 
     # Nothing loaded: typing replaces an earlier "No ... matching" message
-    # with "Ready to load policies".
+    # with "Ready to load source/target policies".
     if ($items.Count -eq 0) { Update-EmptyState -Side $Side -Force }
 
     if ($search) {
@@ -346,10 +397,19 @@ function Test-ListToolsAllowed {
 
 # Re-enables the search fields where Test-ListToolsAllowed allows it (Set-Busy
 # switches both off). Called right after Start-Runspace (job type known).
+# During a load the other side's tenant dropdown and name filter are on too
+# (with a tenant to pick): its tenant can be changed meanwhile (that list is
+# reset, Reset-Side); its Load stays off until the running load is done.
 function Enable-ListToolsDuringJob {
+    $job = $AppState.CurrentJob
     foreach ($side in 'Source', 'Target') {
         $box = if ($side -eq 'Source') { $UI.txtSourceFilter } else { $UI.txtTargetFilter }
+        $cmb = if ($side -eq 'Source') { $UI.cmbSourceTenant } else { $UI.cmbTargetTenant }
         if ($box -and (Test-ListToolsAllowed -Side $side)) { $box.IsEnabled = $true }
+        if ($job -and $job['Type'] -eq 'Load' -and $job['LoadSide'] -ne $side -and $cmb -and $cmb.SelectedItem) {
+            $cmb.IsEnabled = $true
+            if ($box) { $box.IsEnabled = $true }
+        }
     }
 }
 
@@ -669,7 +729,7 @@ function Initialize-PolicyListEvents {
     }
 
     # ── Tenant dropdown changes ───────────────────────────────────────────────────
-    # Tenant Configuration opens on the tenant of the side the user used last
+    # Baseline Configuration opens on the tenant of the side the user used last
     # (dropdown change or a load); Source at start. Selections made by
     # Basetune itself (start-up, after a save) do not count.
     $AppState.lastPickedTenantSide = 'Source'
@@ -702,6 +762,9 @@ Export-ModuleMember -Function @(
     'Update-Counts',
     'Reset-Side',
     'Set-FilterMode',
+    'Update-FilterIcon',
+    'Update-LoadIcon',
+    'Set-CountToolTip',
     'Get-LoadingCardText',
     'Update-EmptyState',
     'Update-ListFilter',

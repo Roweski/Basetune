@@ -21,6 +21,9 @@
         {{SUBTITLE}}
     </header>
 
+    <!-- Counts and filters in one frame (toolbar): two strips, a line
+         between them. -->
+    <div class="toolbar">
     <div class="stats-grid">
         <!-- The tiles are the status and issue filter (no dropdowns for
              those): a status tile and an issue tile combine (Diff + Conflict,
@@ -42,7 +45,12 @@
     </div>
 
     <div class="filters">
-        <input type="text" id="search" tabindex="12" placeholder="Search setting or policy..." oninput="applyFilters()">
+        <!-- Search box with a clear button (x, shown while the box has text;
+             mouse-only, Escape in the box does the same: clearSearch). -->
+        <span class="search-wrap" id="searchWrap">
+            <input type="text" id="search" tabindex="12" placeholder="Search setting or policy..." oninput="applyFilters()" onkeydown="if (event.key === 'Escape' &amp;&amp; this.value) clearSearch()">
+            <button type="button" class="search-clear" tabindex="-1" title="Clear search" aria-label="Clear search" onclick="clearSearch()"><svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+        </span>
         <!-- Platform: only the platforms in this compare. The tiles count for
              the chosen platform; the policy lists show its policies. -->
         <select id="filterPlatform" tabindex="9" onchange="onPlatformChange()">
@@ -54,6 +62,7 @@
         <select id="filterTarget" tabindex="11" onchange="applyFilters()">
             <option value="">All target policies</option>
         </select>
+    </div>
     </div>
     <div class="row-count" id="rowCount"></div>
 

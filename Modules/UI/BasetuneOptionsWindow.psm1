@@ -41,8 +41,9 @@ function Open-OptionsWindow {
     # Theme: a new choice is shown right away (preview); Save Settings keeps
     # it, closing without saving goes back to the saved theme.
     if ($sCmbTheme) {
-        $sCmbTheme.ItemsSource  = @('Dark', 'Light')
-        $sCmbTheme.SelectedItem = if ((Get-BasetuneTheme) -eq 'light') { 'Light' } else { 'Dark' }
+        # Shown as 'Dark' / 'Light', saved lower case.
+        $sCmbTheme.ItemsSource  = @('Dark', 'Light')   # the default first
+        $sCmbTheme.SelectedItem = (Get-Culture).TextInfo.ToTitleCase((Get-BasetuneTheme))
     }
 
     # Platforms: a checkbox per platform (multi-select). The ComboBox never
@@ -71,6 +72,7 @@ function Open-OptionsWindow {
             })
             $ci = [System.Windows.Controls.ComboBoxItem]::new()
             $ci.Padding = [System.Windows.Thickness]::new(0)
+            $ci.Tag     = 'check'   # own checkbox: no tick column (ComboBoxItem style)
             $ci.Content = $bd
             [void]$sCmbPlatforms.Items.Add($ci)
             $script:optPlatformChecks.Add($cb)
@@ -126,7 +128,7 @@ function Open-OptionsWindow {
                 $sTxtPathReport.ClearValue([System.Windows.Controls.Control]::BorderBrushProperty)
                 $sTxtPathReport.ToolTip     = $null
             } else {
-                $sTxtPathReport.BorderBrush = [System.Windows.Media.Brushes]::Red
+                $sTxtPathReport.SetResourceReference([System.Windows.Controls.Control]::BorderBrushProperty, 'ErrorBrush')
                 $sTxtPathReport.ToolTip     = $pathErr
             }
         }
@@ -145,7 +147,7 @@ function Open-OptionsWindow {
     if ($sCmbMaxThreads) { $sCmbMaxThreads.Add_SelectionChanged($updateSaveState) }
     if ($sCmbTheme) {
         $sCmbTheme.Add_SelectionChanged({
-            $t = if ("$($sCmbTheme.SelectedItem)" -eq 'Light') { 'light' } else { 'dark' }
+            $t = "$($sCmbTheme.SelectedItem)".ToLower()
             if ($t -ne (Get-BasetuneTheme)) { Set-BasetuneTheme $t }
             & $updateSaveState
         })
@@ -194,7 +196,7 @@ function Open-OptionsWindow {
             # Theme: kept, also when saving Options.json fails below (then for
             # this session only).
             if ($sCmbTheme -and $sCmbTheme.SelectedItem) {
-                $AppState.savedTheme = if ("$($sCmbTheme.SelectedItem)" -eq 'Light') { 'light' } else { 'dark' }
+                $AppState.savedTheme = "$($sCmbTheme.SelectedItem)".ToLower()
             }
 
             # Write to Options.json (Config.json holds the tenants only)
@@ -227,7 +229,7 @@ function Open-OptionsWindow {
 
     # Closed without saving the theme: back to the saved theme.
     $sWindow.Add_Closed({
-        $keep = if ($AppState.savedTheme -eq 'light') { 'light' } else { 'dark' }
+        $keep = $AppState.savedTheme
         if ((Get-BasetuneTheme) -ne $keep) { Set-BasetuneTheme $keep }
     })
 

@@ -247,7 +247,8 @@
         const prev = currentPage - 1;
         const next = currentPage + 1;
 
-        var btns = '';
+        // The buttons as one strip (.page-strip, as the toolbar).
+        var btns = '<span class="page-strip">';
         btns += '<button tabindex="-1" onclick="goPage(1)"'       + (currentPage===1     ? ' disabled' : '') + '>&#171; First</button>';
         btns += '<button tabindex="-1" onclick="goPage(' + prev + ')"' + (currentPage===1 ? ' disabled' : '') + '>&#8249; Prev</button>';
 
@@ -258,6 +259,7 @@
 
         btns += '<button tabindex="-1" onclick="goPage(' + next   + ')"' + (currentPage===pages ? ' disabled' : '') + '>Next &#8250;</button>';
         btns += '<button tabindex="-1" onclick="goPage(' + pages  + ')"' + (currentPage===pages ? ' disabled' : '') + '>Last &#187;</button>';
+        btns += '</span>';
         btns += '<span class="page-info">Page ' + currentPage + ' of ' + pages + '</span>';
 
         el.innerHTML = btns;
@@ -313,12 +315,24 @@
             el.setAttribute('aria-pressed', on[cls] ? 'true' : 'false');
         });
         // A dropdown with a choice and the search box with text are marked
-        // as an active tile (blue border), so every filter in use shows;
-        // "All ..." or an empty box: not marked.
+        // as an active count segment, so every filter in use shows.
         ['filterPlatform', 'filterPolicy', 'filterTarget', 'search'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.classList.toggle('active', el.value.trim() !== '');
         });
+        // The clear button (x) of the search box shows while it has text.
+        var wrap = document.getElementById('searchWrap');
+        if (wrap) wrap.classList.toggle('has-text', document.getElementById('search').value !== '');
+    }
+
+    // Clear button (x) or Escape in the search box: empty the search and keep
+    // the focus in the box; the other filters stay.
+    function clearSearch() {
+        var box = document.getElementById('search');
+        box.value = '';
+        exactSetting = null;
+        applyFilters();
+        box.focus();
     }
 
     function applyFilters() {

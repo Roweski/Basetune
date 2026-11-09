@@ -1,4 +1,4 @@
-<Window UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+<Window UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="Grayscale" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Options"
         SizeToContent="Height" Width="420"
@@ -6,6 +6,7 @@
         FontFamily="Segoe UI"
         Background="{DynamicResource BgBrush}" Foreground="{DynamicResource TextBrush}"
         ShowInTaskbar="False">
+    <!-- TextRenderingMode Grayscale (not ClearType): fuller, calmer text on the dark surfaces, as in a browser. -->
     <!-- Styles and colours come from BasetuneTheme.xaml (application
          resources, loaded by Load-Xaml). Light/dark switches live. -->
 
@@ -15,13 +16,15 @@
          The size stays fixed: a zone only sets the position (see
          Initialize-DialogChrome in BasetuneWpf.psm1). -->
     <WindowChrome.WindowChrome>
-        <WindowChrome CaptionHeight="32" ResizeBorderThickness="0" GlassFrameThickness="0"
+        <WindowChrome CaptionHeight="12" ResizeBorderThickness="0" GlassFrameThickness="0"
                       CornerRadius="0" UseAeroCaptionButtons="False"/>
     </WindowChrome.WindowChrome>
 
     <Border BorderThickness="1" BorderBrush="{DynamicResource CardBorderBrush}">
     <DockPanel>
-        <Grid DockPanel.Dock="Top" Height="32" Background="{DynamicResource BgBrush}">
+        <!-- No title bar (Collapsed). Its close button stays: Initialize-DialogChrome
+             is set up from it; the window moves by its 12px top margin (CaptionHeight). -->
+        <Grid DockPanel.Dock="Top" Height="32" Background="{DynamicResource BgBrush}" Visibility="Collapsed">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -36,23 +39,33 @@
                     Content="&#xE8BB;" ToolTip="Close"/>
         </Grid>
 
-    <!-- Outer spacing as in the main window: 20 left/right, 16 under the
-         title bar and at the bottom. Card padding 10 at the top and sides, as
+    <!-- Outer spacing: 12 on every side, the gap between the cards of the main window (also the top margin, by which the
+         window moves: CaptionHeight). Card padding 10 at the top and sides, as
          the tenant cards in the main window (same label style and 6 under it),
          so the first field lines up with the tenant dropdown there. 15 at the
          bottom: the label line box adds about 5 above its capitals, so the
          visible gap from the card edge to the first label is about 15, and the
          last input gets the same gap to the bottom edge. 12 between the field
          rows. -->
-    <Grid Margin="20,16,20,0">
+    <Grid Margin="12,12,12,0">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="12"/>
+            <RowDefinition Height="0"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="16"/>
+            <RowDefinition Height="12"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="10,10,10,15">
+        <!-- The card: the fields on top, a line, then the buttons as a strip at
+             the bottom of the card (as the button strip of the main window: the
+             rest in the strip colour, the action as an action segment (the hover tint and
+             the blue line when it can be used), Close an icon segment; stripButtons is clipped to the rounded card,
+             Initialize-DialogChrome). -->
+        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0" Padding="0">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/> <RowDefinition Height="Auto"/> <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+        <Border Grid.Row="0" Padding="10,10,10,15">
             <StackPanel>
                 <Grid Margin="0,0,0,12">
                     <StackPanel>
@@ -102,14 +115,30 @@
                 </Grid>
             </StackPanel>
         </Border>
+            <Rectangle Grid.Row="1" Style="{StaticResource StripHSep}"/>
+            <Grid x:Name="stripButtons" Grid.Row="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>    <ColumnDefinition Width="1"/>
+                    <ColumnDefinition Width="Auto"/> <ColumnDefinition Width="1"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button x:Name="btnSaveSettings" Style="{StaticResource PrimaryBtn}"
-                    Content="Save Settings" MinWidth="110" Height="32" Padding="12,0" Margin="0,0,12,0"
-                    IsEnabled="False"/>
-            <Button x:Name="btnCloseSettings" Style="{StaticResource SecBtn}"
-                    Content="Close" MinWidth="80" Height="32" Padding="12,0"/>
-        </StackPanel>
+                <Rectangle Grid.Column="1" Style="{StaticResource StripSep}"/>
+                <Button x:Name="btnSaveSettings" Grid.Column="2" Style="{StaticResource StripAccentBtn}" Content="Save Settings" Height="34" Padding="20,0" IsEnabled="False"/>
+                <Rectangle Grid.Column="3" Style="{StaticResource StripSep}"/>
+                <!-- Close: a neutral icon segment (40) with an X; the action left of it is the one with the blue line. -->
+                <Button x:Name="btnCloseSettings" Grid.Column="4" Style="{StaticResource StripIconBtn}" Width="40" Height="34" Padding="0" ToolTip="Close">
+                    <Viewbox Width="18" Height="18" Stretch="Uniform" Margin="0,2,0,0" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Canvas Width="24" Height="24">
+                            <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  Data="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
+                        </Canvas>
+                    </Viewbox>
+                </Button>
+            </Grid>
+        </Grid>
+        </Border>
+
     </Grid>
     </DockPanel>
     </Border>

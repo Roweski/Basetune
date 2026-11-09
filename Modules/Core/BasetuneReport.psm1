@@ -184,8 +184,8 @@ function Get-HtmlReport {
         [string]$SourceLabel = "",
         [string]$TargetLabel = "",
 
-        # Basetune's theme (settings.theme in Config.json): the report opens
-        # in it; its own toggle still switches it.
+        # Basetune's theme (theme in Options.json): the report opens in it;
+        # its own toggle still switches it.
         [string]$Theme = "light"
     )
 

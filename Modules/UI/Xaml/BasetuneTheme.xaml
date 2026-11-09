@@ -11,11 +11,17 @@
 
     Brush keys used:
       BgBrush CardBrush CardBorderBrush TextBrush SubTextBrush MutedBrush
-      HintBrush InputBgBrush InputBorderBrush AccentBrush AccentHoverBrush
-      AccentSoftBrush HoverBrush DisabledBgBrush DisabledFgBrush DisabledBorderBrush IconFgBrush
-      SecBtnFgBrush SecBtnBgBrush SectionLabelBrush ConsoleBgBrush ConsoleFgBrush ConsoleBtnBgBrush
-      ConsoleBtnBorderBrush ConsoleIconFgBrush ScrollThumbBrush PopupBgBrush
-      PopupBorderBrush WarnBrush ErrorBrush AttentionBrush AttentionHoverBrush CaptionHoverBrush
+      HintBrush InputBgBrush InputBorderBrush AccentBrush
+      AccentSoftBrush AccentSoftHoverBrush HoverBrush CheckTickBrush
+      ActionBgBrush ActionFgBrush ActionHoverBgBrush ActionHoverFgBrush
+      CancelActionBgBrush CancelActionFgBrush CancelActionHoverBgBrush CancelActionHoverFgBrush
+      ActionLineBrush SecondaryActionBgBrush SecondaryActionFgBrush SecondaryActionHoverBgBrush SecondaryActionHoverFgBrush SecondaryActionLineBrush CancelActionLineBrush
+      LayersBgBrush LayersFgBrush LayersHoverBgBrush LayersHoverFgBrush
+      DisabledFgBrush IconFgBrush
+      SecBtnFgBrush SectionLabelBrush ConsoleBgBrush ConsoleFgBrush
+      ScrollThumbBrush PopupBgBrush
+      PopupBorderBrush WarnBrush ErrorBrush
+      CaptionHoverBrush
       CaptionPressedBrush
 -->
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -37,12 +43,10 @@
     </Style>
 
     <!-- ── Labels ───────────────────────────────────────────────────────── -->
-    <!-- Form label above an input, in the look of SectionLabel (SOURCE TENANT):
-         12, SemiBold, Basetune blue; TextBlock has no text transform, so the
-         capitals are in the XAML text. Left margin 11 = border (1) + text inset
-         of TextBox / PasswordBox / ComboBox, so the label starts exactly above
-         the value; bottom 6 = the same gap as SOURCE / TARGET TENANT above the
-         tenant dropdown. -->
+    <!-- Form label above an input (dialogs): 12, SemiBold, Basetune blue; TextBlock has no text
+         transform, so the capitals are in the XAML text. Left margin 11 =
+         border (1) + text inset of TextBox / PasswordBox / ComboBox, so the
+         label starts exactly above the value; 6 between label and input. -->
     <Style x:Key="FL" TargetType="TextBlock">
         <Setter Property="FontSize"   Value="12"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
@@ -57,13 +61,89 @@
         <Setter Property="Margin"     Value="6,0,0,6"/>
         <Setter Property="Visibility" Value="Collapsed"/>
     </Style>
-    <!-- Card section header: SOURCE TENANT, TARGET POLICIES, ... -->
-    <Style x:Key="SectionLabel" TargetType="TextBlock">
-        <Setter Property="FontSize"   Value="12"/>
-        <Setter Property="FontWeight" Value="SemiBold"/>
-        <!-- Basetune blue in light and dark mode (own key, so it can differ per theme). -->
-        <Setter Property="Foreground" Value="{DynamicResource SectionLabelBrush}"/>
+    <!-- ── Strip icons (24x24 canvas, in a Viewbox) ─────────────────────────
+         The colour comes from the Button around them (Fill / Stroke bound to
+         its Foreground), so hover, the disabled colour and the attention look
+         reach the icon. Outline icons are strokes (round ends). -->
+    <!-- Layers, filled: Baseline Configuration (buttons strip). The two bands are
+         1.8 thick (square to their slope), the stroke of the outline version. -->
+    <Style x:Key="IconLayersFilled" TargetType="Path">
+        <Setter Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        <Setter Property="Data" Value="M12,2.5L22,8L12,13.5L2,8Z M2,12.2L3.86,11.18L12,15.65L20.14,11.18L22,12.2L12,17.7Z M2,16.4L3.86,15.38L12,19.85L20.14,15.38L22,16.4L12,21.9Z"/>
     </Style>
+    <!-- Layers, outline: Baseline Configuration on one side's tenant (the tenant
+         strips) and the mark of the tenant dropdown in Baseline Configuration. -->
+    <Style x:Key="IconLayersOutline" TargetType="Path">
+        <Setter Property="Stroke" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        <Setter Property="StrokeThickness" Value="1.8"/>
+        <Setter Property="StrokeLineJoin" Value="Round"/>
+        <Setter Property="StrokeStartLineCap" Value="Round"/>
+        <Setter Property="StrokeEndLineCap" Value="Round"/>
+        <Setter Property="Data" Value="M12,3L21,8L12,13L3,8Z M3,12L12,17L21,12 M3,16L12,21L21,16"/>
+    </Style>
+    <!-- Two opposite arrows: Compare. Both span x 4..20, so they line up. -->
+    <Style x:Key="IconSwap" TargetType="Path">
+        <Setter Property="Stroke" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        <Setter Property="StrokeThickness" Value="2"/>
+        <Setter Property="StrokeLineJoin" Value="Round"/>
+        <Setter Property="StrokeStartLineCap" Value="Round"/>
+        <Setter Property="StrokeEndLineCap" Value="Round"/>
+        <Setter Property="Data" Value="M4,8H20 M16,4L20,8L16,12 M20,16H4 M8,12L4,16L8,20"/>
+    </Style>
+    <!-- Options: the MDI tune sliders (filled path), the weight of View Report / Export. -->
+    <Style x:Key="IconSliders" TargetType="Path">
+        <Setter Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        <Setter Property="Data" Value="M3,17V19H9V17H3M3,5V7H13V5H3M13,21V19H21V17H13V15H11V21H13M7,9V11H3V13H7V15H9V9H7M21,13V11H11V13H21M15,9H17V7H21V5H17V3H15V9Z"/>
+    </Style>
+    <!-- Download Definitions: the filled box of View Report (3..21, corners 2) with a
+         list cut out (even-odd fill): three dots and three lines with round ends.
+         New-DownloadButtonContent builds the same icon from code. -->
+    <Style x:Key="IconDownload" TargetType="Path">
+        <Setter Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        <Setter Property="Data" Value="M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3Z M7.4,7.3A1.3,1.3 0 1,1 7.4,9.9A1.3,1.3 0 1,1 7.4,7.3Z M11.25,7.75H16.35A0.85,0.85 0 0,1 16.35,9.45H11.25A0.85,0.85 0 0,1 11.25,7.75Z M7.4,10.7A1.3,1.3 0 1,1 7.4,13.3A1.3,1.3 0 1,1 7.4,10.7Z M11.25,11.15H16.35A0.85,0.85 0 0,1 16.35,12.85H11.25A0.85,0.85 0 0,1 11.25,11.15Z M7.4,14.1A1.3,1.3 0 1,1 7.4,16.7A1.3,1.3 0 1,1 7.4,14.1Z M11.25,14.55H16.35A0.85,0.85 0 0,1 16.35,16.25H11.25A0.85,0.85 0 0,1 11.25,14.55Z"/>
+    </Style>
+    <!-- Open Basetune.log: the outline of View Details (3..21, corners 2, walls 2)
+         with only its short line (7..14, 7..9) at the top left, filled path. -->
+    <Style x:Key="IconLog" TargetType="Path">
+        <Setter Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        <Setter Property="Data" Value="M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M5,5V19H19V5H5Z M7,7V9H14V7H7Z"/>
+    </Style>
+    <!-- Reload arrows (MDI refresh): Load once policies are loaded (Update-LoadIcon
+         sets it as the Data of the play Path). -->
+    <Geometry x:Key="GeoReload">M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z</Geometry>
+    <!-- Play triangle: Load. -->
+    <Style x:Key="IconPlay" TargetType="Path">
+        <Setter Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
+        <Setter Property="Data" Value="M8,5.14V19.14L19,12.14L8,5.14Z"/>
+    </Style>
+    <!-- Name filter field icons (Update-FilterIcon switches the Data), one family (a wide
+         load filter, magnifier = search in the loaded list. -->
+    <Geometry x:Key="GeoFunnel">M22,3H2L10,12.46V19L14,21V12.46Z</Geometry>
+    <Geometry x:Key="GeoSearch">M4,10.5A6.5,6.5 0 1,1 17,10.5A6.5,6.5 0 1,1 4,10.5Z M15.2,15.2L20,20</Geometry>
+    <!-- The icon left in the name filter field, over the TextBox (not
+         hit-testable), 13.5, a little over the Export and reload icons; the hint
+         text and the typed text start right of it.
+         IsEnabled is bound to the field's: the disabled colour with it. -->
+    <Style x:Key="FilterFieldIcon" TargetType="Path">
+        <Setter Property="Stroke" Value="{DynamicResource SubTextBrush}"/>
+        <Setter Property="StrokeThickness" Value="1.5"/>
+        <Setter Property="StrokeLineJoin" Value="Round"/>
+        <Setter Property="StrokeStartLineCap" Value="Round"/>
+        <Setter Property="StrokeEndLineCap" Value="Round"/>
+        <Setter Property="Width" Value="13.5"/>
+        <Setter Property="Height" Value="13.5"/>
+        <Setter Property="Stretch" Value="Uniform"/>
+        <Setter Property="Margin" Value="14,1,0,0"/>
+        <Setter Property="HorizontalAlignment" Value="Left"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="IsHitTestVisible" Value="False"/>
+        <Style.Triggers>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Stroke" Value="{DynamicResource DisabledFgBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- Placeholder text that sits behind a transparent TextBox (or in an
          empty dropdown): 13, a little smaller than the 14 of a value. -->
     <Style x:Key="HintText" TargetType="TextBlock">
@@ -74,11 +154,9 @@
         <Setter Property="IsHitTestVisible"  Value="False"/>
     </Style>
 
-    <!-- ── Primary button (blue) ────────────────────────────────────────── -->
     <!-- Keyboard focus (Tab) looks like hover. WPF shows a FocusVisualStyle only
          for keyboard navigation, never after a mouse click, so nothing sticks.
-         - AccentFocusVisual: accent outline, same as hovering a neutral button.
-         - PrimaryFocusVisual: slightly darker fill, same as hovering a blue button. -->
+         AccentFocusVisual: accent outline, same as hovering a neutral button. -->
     <Style x:Key="AccentFocusVisual">
         <Setter Property="Control.Template">
             <Setter.Value>
@@ -89,112 +167,7 @@
             </Setter.Value>
         </Setter>
     </Style>
-    <Style x:Key="PrimaryFocusVisual">
-        <Setter Property="Control.Template">
-            <Setter.Value>
-                <ControlTemplate>
-                    <Border CornerRadius="8" Background="#1F000000" SnapsToDevicePixels="True"/>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
 
-    <!-- Button templates: fill and border are two layers ("fill" over the
-         whole rounded shape, "bd" only the 1px border on top). One Border
-         with Background + BorderBrush paints the fill only inside the
-         border; at 125/150% scaling the anti-aliased edges of both leave a
-         lighter ring in the corners. "bd" keeps BorderThickness 1 in every
-         state, so the content never moves. -->
-    <Style x:Key="PrimaryBtn" TargetType="Button">
-        <!-- Keyboard focus (Tab) looks like hover (see PrimaryFocusVisual). -->
-        <Setter Property="FocusVisualStyle" Value="{StaticResource PrimaryFocusVisual}"/>
-        <Setter Property="Background"      Value="{DynamicResource AccentBrush}"/>
-        <Setter Property="Foreground"      Value="White"/>
-        <Setter Property="FontSize"        Value="14"/>
-        <Setter Property="FontWeight"      Value="SemiBold"/>
-        <Setter Property="Height"          Value="34"/>
-        <Setter Property="BorderThickness" Value="0"/>
-        <Setter Property="Cursor"          Value="Hand"/>
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="Button">
-                    <Grid>
-                        <Border x:Name="fill" Background="{TemplateBinding Background}" CornerRadius="8"/>
-                        <Border x:Name="bd" CornerRadius="8" BorderThickness="1" BorderBrush="Transparent"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </Grid>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="{DynamicResource AccentHoverBrush}"/>
-                        </Trigger>
-                        <Trigger Property="IsEnabled" Value="False">
-                            <Setter TargetName="fill" Property="Background" Value="{DynamicResource DisabledBgBrush}"/>
-                            <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}"/>
-                            <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
-                        </Trigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
-
-    <!-- ── Secondary button (outline) ───────────────────────────────────── -->
-    <Style x:Key="SecBtn" TargetType="Button">
-        <!-- Keyboard focus (Tab) looks like hover (see AccentFocusVisual). -->
-        <Setter Property="FocusVisualStyle" Value="{StaticResource AccentFocusVisual}"/>
-        <Setter Property="Background"      Value="{DynamicResource SecBtnBgBrush}"/>
-        <Setter Property="Foreground"      Value="{DynamicResource SecBtnFgBrush}"/>
-        <Setter Property="FontSize"        Value="14"/>
-        <Setter Property="Height"          Value="30"/>
-        <Setter Property="BorderBrush"     Value="{DynamicResource InputBorderBrush}"/>
-        <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Cursor"          Value="Hand"/>
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="Button">
-                    <!-- Two layers, see the note above PrimaryBtn. -->
-                    <Grid>
-                        <Border Background="{TemplateBinding Background}" CornerRadius="8"/>
-                        <Border BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="8" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </Grid>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-                            <Setter Property="Foreground"  Value="{DynamicResource AccentBrush}"/>
-                        </Trigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-        <!-- Disabled state at Style level (not template level) so the
-             Foreground setter targets the Button itself. Icon Paths bind
-             their Fill to the Button's Foreground and only see changes made
-             on the Button. -->
-        <Style.Triggers>
-            <Trigger Property="IsEnabled" Value="False">
-                <!-- Same disabled look as PrimaryBtn (View Report). -->
-                <Setter Property="Background"  Value="{DynamicResource DisabledBgBrush}"/>
-                <Setter Property="Foreground"  Value="{DynamicResource DisabledFgBrush}"/>
-                <Setter Property="BorderBrush" Value="{DynamicResource DisabledBorderBrush}"/>
-                <Setter Property="Cursor"      Value="Arrow"/>
-            </Trigger>
-        </Style.Triggers>
-    </Style>
-
-    <!-- Icon-only secondary button (Export, trash) -->
-    <Style x:Key="IconBtn" TargetType="Button" BasedOn="{StaticResource SecBtn}">
-        <Setter Property="Foreground" Value="{DynamicResource IconFgBrush}"/>
-    </Style>
-
-    <!-- Icon button inside the log (console) card: Download, Tenant
-         Configuration, Options, light/dark. Light grey card in light mode,
-         dark terminal in dark mode. -->
     <!-- Caption buttons of the main window's own title bar (WindowChrome):
          minimise / maximise / close, Windows 11 size (46x32) and glyphs
          (Segoe Fluent Icons, Segoe MDL2 Assets on Windows 10). -->
@@ -231,7 +204,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Bd" Background="{TemplateBinding Background}">
-                        <ContentPresenter x:Name="Cp" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
@@ -246,20 +219,6 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
-    </Style>
-
-    <Style x:Key="ConsoleIconBtn" TargetType="Button" BasedOn="{StaticResource SecBtn}">
-        <Setter Property="Background"  Value="{DynamicResource ConsoleBtnBgBrush}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource ConsoleBtnBorderBrush}"/>
-        <Setter Property="Foreground"  Value="{DynamicResource ConsoleIconFgBrush}"/>
-    </Style>
-
-    <!-- Trash icon button (Tenant Configuration) -->
-    <Style x:Key="TrashBtn" TargetType="Button" BasedOn="{StaticResource IconBtn}">
-        <Setter Property="Width"             Value="30"/>
-        <Setter Property="Height"            Value="30"/>
-        <Setter Property="Padding"           Value="0"/>
-        <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
 
     <!-- Small transparent button inside an input: clear (x), browse (...),
@@ -289,12 +248,17 @@
     </Style>
 
     <!-- ── TextBox ──────────────────────────────────────────────────────── -->
+    <!-- Dialog fields look like the segments of the main window: a flat
+         fill without a visible border (BorderBrush = the fill), the hover
+         tint on mouse-over and while typing (keyboard focus), no blue
+         border. The 1px border stays, so a red BorderBrush set from code
+         (invalid value) still shows. -->
     <Style TargetType="TextBox">
         <Setter Property="Height"                   Value="32"/>
         <Setter Property="FontSize"                 Value="14"/>
         <Setter Property="Foreground"               Value="{DynamicResource TextBrush}"/>
         <Setter Property="Background"               Value="{DynamicResource InputBgBrush}"/>
-        <Setter Property="BorderBrush"              Value="{DynamicResource InputBorderBrush}"/>
+        <Setter Property="BorderBrush"              Value="{DynamicResource InputBgBrush}"/>
         <Setter Property="BorderThickness"          Value="1"/>
         <Setter Property="CaretBrush"               Value="{DynamicResource TextBrush}"/>
         <Setter Property="SelectionBrush"           Value="{DynamicResource AccentBrush}"/>
@@ -307,10 +271,20 @@
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
                             CornerRadius="8">
-                        <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
-                                      HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                        <Grid>
+                            <!-- Mouse-over: the hover tint over the input colour. -->
+                            <Border x:Name="tint" CornerRadius="7" Background="Transparent"/>
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                        </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="tint" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="tint" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                        </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
                             <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
@@ -319,16 +293,6 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
-        <!-- Style-level triggers have lower precedence than a local
-             BorderBrush, so a red validation border set from code stays red. -->
-        <Style.Triggers>
-            <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}"/>
-            </Trigger>
-            <Trigger Property="IsKeyboardFocused" Value="True">
-                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-            </Trigger>
-        </Style.Triggers>
     </Style>
 
     <!-- ── PasswordBox (same look as TextBox) ───────────────────────────── -->
@@ -337,7 +301,7 @@
         <Setter Property="FontSize"                 Value="14"/>
         <Setter Property="Foreground"               Value="{DynamicResource TextBrush}"/>
         <Setter Property="Background"               Value="{DynamicResource InputBgBrush}"/>
-        <Setter Property="BorderBrush"              Value="{DynamicResource InputBorderBrush}"/>
+        <Setter Property="BorderBrush"              Value="{DynamicResource InputBgBrush}"/>
         <Setter Property="BorderThickness"          Value="1"/>
         <Setter Property="CaretBrush"               Value="{DynamicResource TextBrush}"/>
         <Setter Property="SelectionBrush"           Value="{DynamicResource AccentBrush}"/>
@@ -350,10 +314,20 @@
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
                             CornerRadius="8">
-                        <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
-                                      HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                        <Grid>
+                            <!-- Mouse-over: the hover tint over the input colour. -->
+                            <Border x:Name="tint" CornerRadius="7" Background="Transparent"/>
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                        </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="tint" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="tint" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                        </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
                             <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
@@ -362,14 +336,6 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
-        <Style.Triggers>
-            <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}"/>
-            </Trigger>
-            <Trigger Property="IsKeyboardFocused" Value="True">
-                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
-            </Trigger>
-        </Style.Triggers>
     </Style>
 
     <!-- ── ComboBox ─────────────────────────────────────────────────────── -->
@@ -377,17 +343,23 @@
          opens the list. The list opens as a card below the box. -->
     <ControlTemplate x:Key="ComboToggleTemplate" TargetType="ToggleButton">
         <Border x:Name="bd" Background="{DynamicResource InputBgBrush}"
-                BorderBrush="{DynamicResource InputBorderBrush}" BorderThickness="1" CornerRadius="8">
-            <Path x:Name="arrow" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"
-                  Data="M0,0 L4,4 L8,0" Stroke="{DynamicResource SubTextBrush}" StrokeThickness="1.5"
-                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                BorderBrush="{DynamicResource InputBgBrush}" BorderThickness="1" CornerRadius="8">
+            <Grid>
+                <!-- A flat fill as the TextBox. Mouse-over and open: the
+                     hover tint over the fill (as a strip segment), open also a
+                     blue arrow; no blue border. -->
+                <Border x:Name="tint" CornerRadius="7" Background="Transparent"/>
+                <Path x:Name="arrow" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"
+                      Data="M0,0 L4,4 L8,0" Stroke="{DynamicResource SubTextBrush}" StrokeThickness="1.5"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+            </Grid>
         </Border>
         <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentHoverBrush}"/>
+                <Setter TargetName="tint" Property="Background" Value="{DynamicResource HoverBrush}"/>
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                <Setter TargetName="tint" Property="Background" Value="{DynamicResource HoverBrush}"/>
                 <Setter TargetName="arrow" Property="Stroke" Value="{DynamicResource AccentBrush}"/>
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
@@ -396,9 +368,22 @@
         </ControlTemplate.Triggers>
     </ControlTemplate>
 
+    <!-- Keyboard focus on a rounded dialog field (ComboBox): the hover tint
+         over it, rounded as the field. WPF shows a focus visual for the keyboard
+         only, so a mouse click leaves no other colour (only the hover tint). -->
+    <Style x:Key="FieldFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Background="{DynamicResource HoverBrush}" CornerRadius="8" SnapsToDevicePixels="True"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <Style TargetType="ComboBox">
-        <!-- Keyboard focus (Tab) looks like hover (see AccentFocusVisual). -->
-        <Setter Property="FocusVisualStyle"           Value="{StaticResource AccentFocusVisual}"/>
+        <!-- Keyboard focus (Tab) shows the hover tint (FieldFocusVisual), as
+             StripCombo, not an outline. -->
+        <Setter Property="FocusVisualStyle"           Value="{StaticResource FieldFocusVisual}"/>
         <Setter Property="Height"                     Value="32"/>
         <Setter Property="FontSize"                   Value="14"/>
         <Setter Property="Foreground"                 Value="{DynamicResource TextBrush}"/>
@@ -432,15 +417,13 @@
                         <Popup x:Name="PART_Popup" Placement="Bottom" VerticalOffset="4"
                                IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True"
                                Focusable="False" PopupAnimation="Fade">
-                            <Border Margin="0,0,8,8" Background="{DynamicResource PopupBgBrush}"
-                                    BorderBrush="{DynamicResource PopupBorderBrush}" BorderThickness="1"
+                            <!-- A card under the field: the card colours, no shadow. -->
+                            <Border Margin="0" Background="{DynamicResource CardBrush}"
+                                    BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1"
                                     CornerRadius="8" Padding="4"
                                     MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                                <Border.Effect>
-                                    <DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.15" Color="#000000"/>
-                                </Border.Effect>
-                                <ScrollViewer SnapsToDevicePixels="True">
+                                <ScrollViewer SnapsToDevicePixels="True" CanContentScroll="True">
                                     <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
                                 </ScrollViewer>
                             </Border>
@@ -456,25 +439,42 @@
         </Setter>
     </Style>
 
+    <!-- Dropdown item: hover the tint; the chosen one a tick in front and
+         SemiBold (not a colour fill, so the colour is never the only sign). The
+         tick column (20) is always there, so the names line up; not for an item
+         with its own checkbox (Tag "check"). -->
     <Style TargetType="ComboBoxItem">
         <Setter Property="Foreground"      Value="{DynamicResource TextBrush}"/>
         <Setter Property="FontSize"        Value="14"/>
-        <Setter Property="Padding"         Value="8,6"/>
+        <Setter Property="Padding"         Value="6,6,8,6"/>
         <Setter Property="Cursor"          Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBoxItem">
-                    <Border x:Name="bd" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
-                        <ContentPresenter/>
+                    <Border x:Name="bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/> <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="tickBox" Grid.Column="0" Width="20">
+                                <Path x:Name="tick" Visibility="Hidden" VerticalAlignment="Center" HorizontalAlignment="Left"
+                                      Margin="2,1,0,0" Data="M0,4 L3.5,7.5 L10,1" Stroke="{DynamicResource AccentBrush}" StrokeThickness="1.8"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                            </Border>
+                            <ContentPresenter Grid.Column="1"/>
+                        </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="bd" Property="Background" Value="{DynamicResource HoverBrush}"/>
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSoftBrush}"/>
-                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+                            <Setter TargetName="tick" Property="Visibility" Value="Visible"/>
                             <Setter Property="FontWeight" Value="SemiBold"/>
+                        </Trigger>
+                        <!-- An item with its own checkbox (Tag "check", Options: platforms): no tick column. -->
+                        <Trigger Property="Tag" Value="check">
+                            <Setter TargetName="tickBox" Property="Visibility" Value="Collapsed"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
@@ -485,8 +485,287 @@
         </Setter>
     </Style>
 
+    <!-- ── Strip (tenant strip, buttons of the source / target card) ───── -->
+    <!-- A strip is a row of segments side by side, a 1px line between them
+         (StripSep), as the toolbar of the HTML report; the source and target
+         card each have one on top (tenant), a StripHSep line between it and
+         the policy list; the actions card has the button strip at the
+         bottom, under the log. The segments are
+         square and fill their cell: the Grid inside the card is clipped to
+         the rounded card from code (Initialize-BasetuneWindow), so a coloured
+         corner segment (red Cancel) never shows past the corners. Hover:
+         the tint only (no line). Dropdowns and text fields never show a
+         line: open, keyboard focus and a filter in use show a tint. Buttons:
+         an action that can run (Load, Compare, View Report, View Details,
+         Download) has a 1px blue line on the bottom edge (StripAccentBtn);
+         keyboard focus on any strip button is the tint (StripFocusVisual),
+         so the line only means "can be used". Height 34; every
+         segment keeps a 2px bottom line (transparent when not in use), so
+         its content never moves. -->
+    <Style x:Key="StripSep" TargetType="Rectangle">
+        <Setter Property="Width" Value="1"/>
+        <Setter Property="Fill"  Value="{DynamicResource CardBorderBrush}"/>
+    </Style>
+    <!-- Horizontal line between the parts of a card (strip | list | buttons). -->
+    <Style x:Key="StripHSep" TargetType="Rectangle">
+        <Setter Property="Height" Value="1"/>
+        <Setter Property="Fill"   Value="{DynamicResource CardBorderBrush}"/>
+    </Style>
+    <!-- Keyboard focus on a strip button: the hover tint over it, not a line
+         (the blue line at the bottom means "can be used", StripAccentBtn). -->
+    <Style x:Key="StripFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border Background="{DynamicResource HoverBrush}" SnapsToDevicePixels="True"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- Neutral segment button (View Report, icon buttons). Disabled: dimmed
+         text and icon only (the segment keeps the card colour). Disabled at
+         Style level, so the Foreground reaches the icon Paths (they bind to
+         the Button's Foreground). -->
+    <Style x:Key="StripBtn" TargetType="Button">
+        <Setter Property="FocusVisualStyle" Value="{StaticResource StripFocusVisual}"/>
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="Foreground"      Value="{DynamicResource SecBtnFgBrush}"/>
+        <Setter Property="FontSize"        Value="14"/>
+        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        <Setter Property="BorderBrush"     Value="Transparent"/>
+        <Setter Property="Cursor"          Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <!-- The fill (tint) on the Grid. The BorderThickness keeps its room
+                         under the content (transparent), so the content never moves;
+                         the line itself (BorderBrush) is a layer of its own, 1px, on the
+                         last row of the segment, inside the card's frame: the card edge
+                         under it runs on unbroken, as under a filled segment. -->
+                    <Grid Background="{TemplateBinding Background}">
+                        <Border Padding="{TemplateBinding Padding}"
+                                BorderThickness="{TemplateBinding BorderThickness}" BorderBrush="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <Border x:Name="line" Height="1" VerticalAlignment="Bottom" Margin="0"
+                                Background="{TemplateBinding BorderBrush}" IsHitTestVisible="False"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <!-- The first segment of a strip (column 0) sits in the rounded
+                             bottom-left corner of its card: the line starts
+                             after the rounding (radius 8 - 1 border = 7), so it never runs into the
+                             curve and ends cut off. -->
+                        <Trigger Property="Grid.Column" Value="0">
+                            <Setter TargetName="line" Property="Margin" Value="7,0,0,0"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background"  Value="{DynamicResource HoverBrush}"/>
+                <Setter Property="Foreground"  Value="{DynamicResource AccentBrush}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
+                <Setter Property="Cursor"     Value="Arrow"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="StripIconBtn" TargetType="Button" BasedOn="{StaticResource StripBtn}">
+        <Setter Property="Foreground" Value="{DynamicResource IconFgBrush}"/>
+    </Style>
+    <!-- An icon segment that asks to be used (Baseline Configuration while no tenant
+         is configured, Update-ConfigButtonStyle): the mouse-over look of an icon
+         segment kept (the tint and a blue icon), no line, so it also works in the
+         rounded corner; mouse-over a stronger tint. The log line names it too
+         ("Click the layers icon ..."), so the colour is not the only sign. -->
+    <Style x:Key="StripAttentionIconBtn" TargetType="Button" BasedOn="{StaticResource StripIconBtn}">
+        <Setter Property="Background" Value="{DynamicResource HoverBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource AccentSoftHoverBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Action segment (Load; the Download icon with missing definitions): while it can be used
+         the Action* colours of the theme (BasetuneWpf.psm1): light a soft blue
+         tint with blue text and icon, dark the hover tint with the colour of the
+         neutral icon buttons; both a 1px blue line on the bottom edge (ActionLineBrush),
+         SemiBold, so it reads as the button to press not by colour alone.
+         Mouse-over: ActionHover* (light a stronger tint, dark accent text and
+         icon), the line stays. Disabled: as the icon buttons (no fill, no line), dimmed
+         text. Busy: the Cancel style (StripCancelBtn, set by
+         BasetuneButtons.psm1) replaces it. -->
+    <Style x:Key="StripAccentBtn" TargetType="Button" BasedOn="{StaticResource StripBtn}">
+        <Setter Property="Background"  Value="{DynamicResource ActionBgBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource ActionLineBrush}"/>
+        <Setter Property="Foreground"  Value="{DynamicResource ActionFgBrush}"/>
+        <Setter Property="FontWeight"  Value="SemiBold"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background"  Value="{DynamicResource ActionHoverBgBrush}"/>
+                <Setter Property="Foreground"  Value="{DynamicResource ActionHoverFgBrush}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Background"  Value="Transparent"/>
+                <Setter Property="BorderBrush" Value="Transparent"/>
+                <Setter Property="Foreground"  Value="{DynamicResource DisabledFgBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- Cancel (Load, Compare, Export, Download while a job runs, set by
+         BasetuneButtons.psm1): as StripAccentBtn in the CancelAction* colours
+         (light a soft red tint with red text and a red line, dark the hover tint
+         with a red line and, on mouse-over, red text and icon); the X icon and the
+         "Cancel" label say what it does, so the red is not the only sign. -->
+    <Style x:Key="StripCancelBtn" TargetType="Button" BasedOn="{StaticResource StripAccentBtn}">
+        <Setter Property="Background"  Value="{DynamicResource CancelActionBgBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource CancelActionLineBrush}"/>
+        <Setter Property="Foreground"  Value="{DynamicResource CancelActionFgBrush}"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background"  Value="{DynamicResource CancelActionHoverBgBrush}"/>
+                <Setter Property="Foreground"  Value="{DynamicResource CancelActionHoverFgBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- Action segments (Compare; the layers buttons of the tenant strips, with
+         BorderBrush Transparent: no line): as StripAccentBtn. Disabled keeps the
+         SemiBold weight: the label keeps its width, so the icon next to it (the
+         content is centred) does not move when the button is enabled. -->
+    <Style x:Key="StripActiveBtn" TargetType="Button" BasedOn="{StaticResource StripAccentBtn}">
+        <Style.Triggers>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Background"  Value="Transparent"/>
+                <Setter Property="BorderBrush" Value="Transparent"/>
+                <Setter Property="Foreground"  Value="{DynamicResource DisabledFgBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- The layers button at the bottom left (Baseline Configuration): as
+         StripActiveBtn in the Layers* colours, no line. Dark the action tint (as
+         Load / Compare), light the look of the icon buttons (no tint, grey icon).
+         The two in the tenant strips are StripActiveBtn with BorderBrush
+         Transparent: the action colours in both themes, no line. -->
+    <Style x:Key="StripLayersBtn" TargetType="Button" BasedOn="{StaticResource StripActiveBtn}">
+        <Setter Property="Background"  Value="{DynamicResource LayersBgBrush}"/>
+        <Setter Property="Foreground"  Value="{DynamicResource LayersFgBrush}"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource LayersHoverBgBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource LayersHoverFgBrush}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <!-- Secondary action segments (View Report, View Details): as StripActiveBtn
+         in the SecondaryAction* colours. Light: blue text and icon, no tint and
+         no line, so after a compare Compare (tint + line) is the main action;
+         dark: as the other action segments. -->
+    <Style x:Key="StripSecondaryBtn" TargetType="Button" BasedOn="{StaticResource StripActiveBtn}">
+        <Setter Property="Background"  Value="{DynamicResource SecondaryActionBgBrush}"/>
+        <Setter Property="Foreground"  Value="{DynamicResource SecondaryActionFgBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource SecondaryActionLineBrush}"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background"  Value="{DynamicResource SecondaryActionHoverBgBrush}"/>
+                <Setter Property="Foreground"  Value="{DynamicResource SecondaryActionHoverFgBrush}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Background"  Value="Transparent"/>
+                <Setter Property="BorderBrush" Value="Transparent"/>
+                <Setter Property="Foreground"  Value="{DynamicResource DisabledFgBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>    <!-- Dropdown segment (tenant): no frame of its own; the list opens as
+         the normal ComboBox card below the bar. -->
+    <ControlTemplate x:Key="StripComboToggleTemplate" TargetType="ToggleButton">
+        <!-- The tint on the Grid (also under the line), the line on the Border. -->
+        <Grid x:Name="bg" Background="Transparent">
+            <Border x:Name="bd" BorderThickness="0,0,0,2" BorderBrush="Transparent">
+                <Path x:Name="arrow" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,2,14,0"
+                      Data="M0,0 L4,4 L8,0" Stroke="{DynamicResource SubTextBrush}" StrokeThickness="1.5"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+            </Border>
+        </Grid>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="{DynamicResource HoverBrush}"/>
+            </Trigger>
+            <!-- Open: the hover tint (once, not over another) and a blue arrow, no line. -->
+            <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="{DynamicResource HoverBrush}"/>
+                <Setter TargetName="arrow" Property="Stroke" Value="{DynamicResource AccentBrush}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <!-- No line under a dropdown, and only the hover tint, as the text
+         segments: no other colour after a click. Keyboard focus (Tab) shows
+         the same tint through StripFocusVisual, as on the buttons; WPF shows a
+         focus visual for the keyboard only, so a mouse click leaves no tint. -->
+    <Style x:Key="StripCombo" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+        <Setter Property="FocusVisualStyle" Value="{StaticResource StripFocusVisual}"/>
+        <Setter Property="Height"           Value="34"/>
+        <Setter Property="Padding"          Value="14,0,32,0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid x:Name="root" Background="Transparent">
+                        <ToggleButton x:Name="toggle" Template="{StaticResource StripComboToggleTemplate}"
+                                      Focusable="False" ClickMode="Press"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"/>
+                        <ContentPresenter x:Name="content" IsHitTestVisible="False"
+                                          Margin="{TemplateBinding Padding}"
+                                          Content="{TemplateBinding SelectionBoxItem}"
+                                          ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                          ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}">
+                            <ContentPresenter.Resources>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                </Style>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
+                        <Popup x:Name="PART_Popup" Placement="Bottom" VerticalOffset="1"
+                               IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True"
+                               Focusable="False" PopupAnimation="Fade">
+                            <!-- Attached to the strip: right under its bottom line (offset 1),
+                                 square top, rounded bottom, the card colours, no shadow. -->
+                            <Border Margin="0" Background="{DynamicResource CardBrush}"
+                                    BorderBrush="{DynamicResource CardBorderBrush}" BorderThickness="1,0,1,1"
+                                    CornerRadius="0,0,8,8" Padding="4"
+                                    MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                    MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                <ScrollViewer SnapsToDevicePixels="True" CanContentScroll="True">
+                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource DisabledFgBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ── Column header (policy lists: Policy / Platform, click = sort) ── -->
-    <!-- Same size as SectionLabel ("SOURCE TENANT"): 12, capitals; Bold, muted grey. -->
+    <!-- 12, capitals; Bold, muted grey. -->
     <Style x:Key="ColumnHeaderBtn" TargetType="Button">
         <Setter Property="Foreground"                 Value="{DynamicResource MutedBrush}"/>
         <Setter Property="Background"                 Value="Transparent"/>
@@ -539,7 +818,7 @@
                             <!-- Radius 4, not 8 like the rest: 8 on a 16px box makes it a circle (a radio button look). -->
                             <Border x:Name="box" CornerRadius="4" BorderThickness="1"
                                     Background="{DynamicResource InputBgBrush}" BorderBrush="{DynamicResource InputBorderBrush}"/>
-                            <Path x:Name="tick" Data="M4.2,8.3 L6.9,11 L11.8,5.4" Stroke="White" StrokeThickness="2"
+                            <Path x:Name="tick" Data="M4.2,8.3 L6.9,11 L11.8,5.4" Stroke="{DynamicResource CheckTickBrush}" StrokeThickness="2"
                                   StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
                                   Visibility="Collapsed"/>                            <!-- Partly selected (IsChecked = null, the select-all box above a
                                  policy list): an accent dot in the empty box, not the usual
@@ -699,7 +978,7 @@
         </Style.Triggers>
     </Style>
 
-    <!-- Busy bar on the bottom edge of the log card (indeterminate only).
+    <!-- Busy bar on the bottom edge of the actions card (indeterminate only).
          A short accent segment with soft ends glides over the edge with an
          ease-in-out. The segment is an OpacityMask whose RelativeTransform
          is animated in fractions of the bar width, so it adapts to any

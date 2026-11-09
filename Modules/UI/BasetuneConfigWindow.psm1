@@ -1,6 +1,6 @@
 # =============================================================================
 # BasetuneConfigWindow.psm1
-# Tenant Configuration window (Open-ConfigWindow) and its tenant form: fields
+# Baseline Configuration window (Open-ConfigWindow) and its tenant form: fields
 # per authentication method, validation and commit (Save-TenantForm),
 # connection test and save. Config.json itself is written by Save-Config
 # (BasetuneSettings.psm1). $UI / $AppState come from BasetuneState.psm1.
@@ -410,7 +410,7 @@ function Start-AddTenant {
 # CONFIGURATION WINDOW
 # ═════════════════════════════════════════════════════════════════════════════
 # Reads Config.json again (quietly) and brings the main window's source and
-# target lists up to date: on closing Tenant Configuration, and on opening it
+# target lists up to date: on closing Baseline Configuration, and on opening it
 # when Config.json could not be read before (a file fixed meanwhile).
 # -ReportError: a Config.json that can no longer be read (made invalid while
 # the window was open) is reported in the log view; the lists are empty then.
@@ -439,6 +439,7 @@ function Update-MainTenantsFromConfig {
 }
 
 function Open-ConfigWindow {
+    param([ValidateSet('', 'Source', 'Target')][string]$Side = '')
     $cfgWindow = Import-Xaml -Path "$($AppState.XamlPath)\BasetuneConfig.xaml" -Width 820 -Height 600
     $cfgWindow.Owner = $UI.Window
 
@@ -653,7 +654,7 @@ function Open-ConfigWindow {
         if (-not $AppState.suppressEvents) { $AppState.cfgFormEdited = $true; Set-UnsavedChanges }
         $txt = $UI.cfgTenantDisplayName.Text
         if ($txt -match '[\\/:*?"<>|]') {
-            $UI.cfgTenantDisplayName.BorderBrush = [System.Windows.Media.Brushes]::Red
+            $UI.cfgTenantDisplayName.SetResourceReference([System.Windows.Controls.Control]::BorderBrushProperty, 'ErrorBrush')
             $UI.cfgTenantDisplayName.ToolTip     = 'Invalid characters: \ / : * ? " < > |'
         } else {
             # Back to the theme border (light or dark) instead of a fixed colour.
@@ -805,7 +806,7 @@ function Open-ConfigWindow {
         if ($shouldTest) {
             Write-Log 'Config' 'Testing connection...' 'INFO'
             if ($UI.lblConnectionStatus) {
-                $UI.lblConnectionStatus.Foreground = [System.Windows.Media.Brushes]::Gray
+                $UI.lblConnectionStatus.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'MutedBrush')
                 $UI.lblConnectionStatus.Text       = "Testing connection..."
                 # Paint the label now: the token call blocks the UI thread,
                 # so it would otherwise only show after the test.
@@ -817,12 +818,13 @@ function Open-ConfigWindow {
             # No buttons disabled: the sync call blocks the UI thread, so
             # clicks only run after this handler returns.
             # New-GraphConnection logs why a test fails ("Could not authenticate
-            # with Microsoft Graph ..."); only an unexpected throw is logged here.
+            # with Microsoft Graph ...") as an ERROR: the tenant is saved, but it
+            # will not load as it is. Only an unexpected throw is logged here.
             $conn = $null
-            try { $conn = New-GraphConnection -Config $testNode -Label 'Config' -FailLevel 'WARN' }
+            try { $conn = New-GraphConnection -Config $testNode -Label 'Config' -FailLevel 'ERROR' }
             catch {
-                Write-Log 'Config' "Could not connect to '$tenantLabel'. See Basetune.log for details" 'WARN'
-                Write-Log 'Config' "Details: $($_.Exception.Message)" 'WARN' -FileOnly
+                Write-Log 'Config' "Could not connect to '$tenantLabel'. See Basetune.log for details" 'ERROR'
+                Write-Log 'Config' "Details: $($_.Exception.Message)" 'ERROR' -FileOnly
             }
 
             $testPassed = ($null -ne $conn)
@@ -835,10 +837,10 @@ function Open-ConfigWindow {
 
             if ($UI.lblConnectionStatus) {
                 if ($testPassed) {
-                    $UI.lblConnectionStatus.Foreground = [System.Windows.Media.Brushes]::Green
+                    $UI.lblConnectionStatus.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'AccentBrush')   # not green: the text says it
                     $UI.lblConnectionStatus.Text       = "Connection successful"
                 } else {
-                    $UI.lblConnectionStatus.Foreground = [System.Windows.Media.Brushes]::Red
+                    $UI.lblConnectionStatus.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'WarnBrush')     # saved anyway: a warning
                     $UI.lblConnectionStatus.Text       = "Connection failed. Saving anyway..."
                 }
             }
@@ -899,7 +901,7 @@ function Open-ConfigWindow {
             # errors) belong to tenants that are gone. Start clean with the
             # same line as a first start (the log file keeps everything).
             if ($before.Count -gt 0 -and $after.Count -eq 0) {
-                Clear-UILog 'Config' 'Click the gear icon to configure a tenant and get started'
+                Clear-UILog 'Config' 'Click the layers icon to configure a tenant and get started'
             }
             Clear-UnsavedChanges
             # After a save: the saved tenant stays selected (the connection
@@ -935,10 +937,12 @@ function Open-ConfigWindow {
     })
 
     $cfgWindow.Add_KeyDown({ param($s,$e); if ($e.Key -eq 'Escape') { $cfgWindow.Close() } })
-    # Opens on: the tenant of the side used last (dropdown change or load,
-    # Source or Target, see $AppState.lastPickedTenantSide), otherwise Source,
-    # otherwise the first tenant; no tenants: empty form.
-    $sideCmb = if ($AppState.lastPickedTenantSide -eq 'Target') { $UI.cmbTargetTenant } else { $UI.cmbSourceTenant }
+    # Opens on: the tenant of -Side (the layers button of a tenant strip), or
+    # of the side used last (dropdown change or load, Source or Target, see
+    # $AppState.lastPickedTenantSide; the layers button of the buttons strip),
+    # otherwise Source, otherwise the first tenant; no tenants: empty form.
+    $pickSide = if ($Side) { $Side } else { $AppState.lastPickedTenantSide }
+    $sideCmb = if ($pickSide -eq 'Target') { $UI.cmbTargetTenant } else { $UI.cmbSourceTenant }
     $openKey = if ($sideCmb -and $sideCmb.SelectedItem) { "$($sideCmb.SelectedItem.Tag)" }
                elseif ($UI.cmbSourceTenant -and $UI.cmbSourceTenant.SelectedItem) { "$($UI.cmbSourceTenant.SelectedItem.Tag)" }
                else { '' }
@@ -948,12 +952,15 @@ function Open-ConfigWindow {
 
 # ═════════════════════════════════════════════════════════════════════════════
 # INITIALISATION
-# Opens Tenant Configuration from the main window. Called once from BasetuneUI.ps1.
+# Opens Baseline Configuration from the main window. Called once from BasetuneUI.ps1.
 # ═════════════════════════════════════════════════════════════════════════════
 function Initialize-ConfigWindowEvents {
     $UI.btnOpenConfig.Add_Click({ Open-ConfigWindow })
+    # The layers button in place of the SOURCE / TARGET label: opens on that side's tenant.
+    if ($UI.btnSourceConfig) { $UI.btnSourceConfig.Add_Click({ Open-ConfigWindow -Side 'Source' }) }
+    if ($UI.btnTargetConfig) { $UI.btnTargetConfig.Add_Click({ Open-ConfigWindow -Side 'Target' }) }
 
-    # The empty-card text "Configure a tenant to get started" is a link: click opens Tenant Configuration.
+    # The empty-card text "Configure a tenant to get started" is a link: click opens Baseline Configuration.
     foreach ($nmLbl in @($UI.lblSourceNoMatch, $UI.lblTargetNoMatch)) {
         if ($nmLbl) {
             $nmLbl.Add_MouseLeftButtonUp({

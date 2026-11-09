@@ -333,7 +333,7 @@ $cli = {
         Write-Log "Download" "Downloading setting and category definitions using tenant '$downloadLabel'..." "INFO"
         $downloadConnection = New-GraphConnection -Config $downloadConfig -Label "Download"
         if (-not $downloadConnection) {
-            Write-Log "Download" "Could not connect to tenant '$downloadLabel'. Check the credentials in Config.json. See Basetune.log for details" "ERROR"
+            # New-GraphConnection already logged why ("Could not authenticate ...").
             exit 1
         }
 
@@ -372,7 +372,7 @@ $cli = {
             })
         }
         if ($rows.Count -eq 0) {
-            Write-Host "No tenants configured. Add a tenant via Tenant Configuration in the UI."
+            Write-Host "No tenants configured. Add a tenant via Baseline Configuration in the UI."
             exit
         }
         $num  = 0
@@ -448,7 +448,7 @@ $cli = {
 
         $exportConnection = New-GraphConnection -Config $exportNode -Label "Export"
         if (-not $exportConnection) {
-            Write-Log "Export" "Could not connect to tenant '$exportLabel'. Check the credentials in Config.json. See Basetune.log for details" "ERROR"
+            # New-GraphConnection already logged why ("Could not authenticate ...").
             exit 1
         }
 
@@ -633,7 +633,7 @@ $cli = {
     $runReportFile = Join-Path $runReportDir 'Report.html'
 
     # The HTML report opens in the same theme as the Basetune UI (Options.json theme,
-    # default dark).
+    # default dark; basetune opens it dark too: the report has light and dark only).
     $reportTheme = if ($options.Theme -eq 'light') { 'light' } else { 'dark' }
 
     try {
