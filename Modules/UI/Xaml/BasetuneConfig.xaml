@@ -98,13 +98,13 @@
                                     <Grid Grid.Column="2">
                                         <ComboBox x:Name="lstTenants" Style="{StaticResource StripCombo}"/>
                                         <!-- Placeholder while no tenant is selected; text set by
-                                             Update-TenantListHint ("Add your first tenant below" / "Enter tenant details below" / "Select a tenant"). -->
+                                             Update-TenantListHint ("Add your first baseline below" / "Enter baseline details below" / "Select a baseline"). -->
                                         <TextBlock x:Name="lstTenantsHint" Style="{StaticResource HintText}" Margin="14,0,0,0"/>
                                     </Grid>
                                     <Rectangle Grid.Column="3" Style="{StaticResource StripSep}"/>
                                     <!-- New tenant: empty form. Icon: MDI plus-circle-outline -->
                                     <Button x:Name="btnAddTenant" Grid.Column="4" Style="{StaticResource StripIconBtn}"
-                                            Height="34" Padding="0" ToolTip="New tenant">
+                                            Height="34" Padding="0" ToolTip="New baseline">
                                         <Viewbox Width="18" Height="18" Stretch="Uniform" Margin="0,1,0,0">
                                             <Canvas Width="24" Height="24">
                                                 <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
@@ -115,7 +115,7 @@
                                     <Rectangle Grid.Column="5" Style="{StaticResource StripSep}"/>
                                     <!-- Remove tenant: disabled while no saved tenant is selected -->
                                     <Button x:Name="btnRemoveTenant" Grid.Column="6" Style="{StaticResource StripIconBtn}"
-                                            Height="34" Padding="0" IsEnabled="False" ToolTip="Remove tenant">
+                                            Height="34" Padding="0" IsEnabled="False" ToolTip="Remove baseline">
                                         <Viewbox Width="18" Height="18" Stretch="Uniform" Margin="0,1,0,0">
                                             <Canvas Width="24" Height="24">
                                                 <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"

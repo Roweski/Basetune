@@ -7,11 +7,11 @@
 ## What it does
 Basetune is a PowerShell-based tool to compare Intune **Settings Catalog** and **Security Baseline** policies between online tenants via Microsoft Graph or offline baselines using JSON exports.
 
-![Basetune UI](docs/Main-3.1.0.png)
+![Basetune UI](docs/Main-3.1.1.png)
 
 Comparison capabilities:
 
-- **All source policies** — Compare each source policy against all selected target policies to detect duplicates and conflicts.
+- **All source policies** — Compare each source policy against all selected target policies.
 - **Live comparison** — Compare policies from online tenants via Microsoft Graph.
 - **Offline comparison** — Compare policies from offline baselines using JSON exports. Setting and category definitions are stored locally for future comparisons without connecting to Microsoft Graph.
 - **Any combination** — Use an online tenant or an offline baseline as either the source or target.
@@ -38,21 +38,21 @@ pwsh.exe .\BasetuneUI.ps1
 ```
 3. Click Baseline Configuration (layers icon) to add an online tenant or an offline baseline.
 4. Select a source and a target, then click **Load** on both sides.
-5. All loaded policies are selected by default. Click **Compare Policies** to run the comparison.
+5. All loaded policies are selected by default. Click **Compare** to run the comparison.
 6. Click **View Report** to open the HTML report, or **View Details** to open Diff.csv.
 
 <br>
 
 ## Baseline Configuration
 
-Click the layers icon at the bottom left to open Baseline Configuration. Each baseline is either an online tenant or an offline baseline:
+Click the layers icon at the bottom left to open Baseline Configuration on the baseline you used last, or the layers icon next to a source or target to open it on that baseline. Each baseline is either an online tenant or an offline baseline:
 
 - **Online tenant** — Enter the tenant ID and client ID of the app registration, then choose **Client Secret** or **Certificate** (thumbprint). On save, Basetune tests the connection to Microsoft Graph; the tenant is saved even if the test fails.
 - **Offline baseline** — Choose **None (JSON)** and select the folder that contains the exported policy files.
 
-![Baseline Configuration](docs/Config-3.1.0.png)
+![Baseline Configuration](docs/Config-3.1.1.png)
 
-> Use **+** to add a baseline and the bin icon to remove the selected one. Baselines are saved in `Config\Config.json`, which you can reuse in a new version of Basetune.
+> Use the plus icon to add a baseline and the bin icon to remove the selected one. Baselines are saved in `Config\Config.json`, which you can reuse in a new version of Basetune.
 
 <br>
 
@@ -60,7 +60,7 @@ Click the layers icon at the bottom left to open Baseline Configuration. Each ba
 
 Intune policies contain raw IDs instead of readable names. Basetune resolves them using lightweight definition files that contain only the properties it needs, keeping them fast to load.
 
-> Basetune includes `Definitions\settings.default.json` and `Definitions\categories.default.json`, which may become outdated over time. Click the Download button in the UI to create or refresh `Definitions\settings.json` and `Definitions\categories.json` for future comparisons (requires an online tenant).
+> Basetune includes `Definitions\settings.default.json` and `Definitions\categories.default.json`, which may become outdated over time. Click **Download Definitions** (the list icon at the bottom right) in the UI to create or refresh `Definitions\settings.json` and `Definitions\categories.json` for future comparisons (requires an online tenant).
 
 A setting without a definition is still compared but shown with its raw ID. Missing categories are retrieved from Microsoft Graph during a comparison if an online tenant is selected. All categories are then saved to `Definitions\categories.json`.
 
@@ -110,7 +110,7 @@ The HTML report is a standalone file that works offline in any browser.
 
 Basetune includes a command-line interface for running comparisons and exports from a terminal or automation script.
 
-![Basetune CLI](docs/CLI-3.0.4.png)
+![Basetune CLI](docs/CLI-3.1.1.png)
 
 > The client secret in Config.json can only be decrypted by the Windows user who saved it. To run the CLI under another account (for example, as a scheduled task), use a separate Basetune folder for that account and enter the client secret once in Baseline Configuration while signed in as that account.
 
@@ -166,7 +166,7 @@ Basetune uses the **OAuth 2.0 client credentials flow** with either a **client s
 - **Client secret** — Stored encrypted with Windows DPAPI (CurrentUser scope) in `Config\Config.json`. Only the same Windows user on the same machine can decrypt it.
 - **Certificate** — Only the certificate thumbprint is stored in `Config\Config.json`. The certificate, including its private key, must be in `Cert:\CurrentUser\My` or `Cert:\LocalMachine\My`.
 
-When loading `Config\Config.json`, Basetune encrypts any plaintext client secrets using DPAPI and saves the updated configuration. Secrets are decrypted only when needed, either for a token request or to display the secret in Tenant Configuration, and Basetune never writes them to disk in plaintext. Access tokens are stored in memory only and are requested again when needed, never renewed in the background.
+When loading `Config\Config.json`, Basetune encrypts any plaintext client secrets using DPAPI and saves the updated configuration. Secrets are decrypted only when needed, either for a token request or to display the secret in Baseline Configuration, and Basetune never writes them to disk in plaintext. Access tokens are stored in memory only and are requested again when needed, never renewed in the background.
 
 <br>
 
@@ -177,7 +177,7 @@ An offline baseline accepts Intune Settings Catalog and Security Baseline JSON f
 | Source | How to export |
 |---|---|
 | **Basetune UI** | Click the export button |
-| **Basetune CLI** | Use `-Export <tenant id>` |
+| **Basetune CLI** | Use `-Export <id>` |
 | **Intune portal** | Devices → Configuration → select policy → Export JSON |
 | **PowerShell** | Export JSON files using Microsoft Graph |
 | **[Open Intune Baseline](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline)** | Download JSON files from GitHub |
@@ -189,7 +189,7 @@ An offline baseline accepts Intune Settings Catalog and Security Baseline JSON f
 
 Graph requests are retried on throttling (HTTP 429), time-outs (HTTP 504) and network errors.
 
-**Max Threads** defines how many policies are loaded from Microsoft Graph in parallel. Too many parallel requests can trigger throttling (HTTP 429). Set in Options or with -MaxThreads (1–32, default 8)
+**Max Threads** defines how many policies are loaded from Microsoft Graph in parallel. Too many parallel requests can trigger throttling (HTTP 429). Set in Options or with -MaxThreads (1–32, default 8).
 
 
 ---

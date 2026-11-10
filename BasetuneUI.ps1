@@ -110,6 +110,9 @@ Write-Log 'Startup' "Basetune $(Get-BasetuneVersion) started (UI)" 'INFO' -FileO
 # send its plaintext->DPAPI migration warning to the console, not the log view.
 $AppState.cfg = $null
 $AppState.tenantList       = @()
+# The baseline used last (dropdown, load or Baseline Configuration): the
+# layers button of the buttons strip opens Baseline Configuration on it.
+$AppState.lastPickedTenantKey = $null
 $AppState.sourceExpanded   = $null
 $AppState.targetExpanded   = $null
 $AppState.sourceConnection = $null
@@ -305,7 +308,7 @@ $UI.Window.Add_Loaded({
     # unreadable (the error line says why). Creating Config.json /
     # Options.json is in the log file only.
     $AppState.startupLastLine = if ($AppState.configReadFailed) { $null }
-        elseif (@($AppState.tenantStore.Keys).Count -eq 0) { @{ Label = 'Config'; Text = 'Click the layers icon to configure a tenant and get started' } }
+        elseif (@($AppState.tenantStore.Keys).Count -eq 0) { @{ Label = 'Config'; Text = 'Click the layers icon to configure a baseline and get started' } }
         else { @{ Label = 'Startup'; Text = 'Ready to load policies' } }
 
     # Downloaded or shipped (.default) files both count.

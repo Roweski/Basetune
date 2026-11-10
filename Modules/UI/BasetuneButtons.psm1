@@ -75,7 +75,7 @@ $script:iconCancelX = "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L
 # sync with the inline Path Data in BasetuneUI.xaml:
 #   iconDownload -> btnOpenDownload (box with a list: dots and lines)
 #   iconExport   -> btnSourceExport / btnTargetExport (square with arrow leaving top-right)
-$script:iconDownload = "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3Z M7.4,7.3A1.3,1.3 0 1,1 7.4,9.9A1.3,1.3 0 1,1 7.4,7.3Z M11.25,7.75H16.35A0.85,0.85 0 0,1 16.35,9.45H11.25A0.85,0.85 0 0,1 11.25,7.75Z M7.4,10.7A1.3,1.3 0 1,1 7.4,13.3A1.3,1.3 0 1,1 7.4,10.7Z M11.25,11.15H16.35A0.85,0.85 0 0,1 16.35,12.85H11.25A0.85,0.85 0 0,1 11.25,11.15Z M7.4,14.1A1.3,1.3 0 1,1 7.4,16.7A1.3,1.3 0 1,1 7.4,14.1Z M11.25,14.55H16.35A0.85,0.85 0 0,1 16.35,16.25H11.25A0.85,0.85 0 0,1 11.25,14.55Z"   # the View Report box with a list (dots and lines) cut out, see New-DownloadButtonContent
+$script:iconDownload = "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3Z M5.5,7H7.5V9H5.5Z M9.5,7H18.5V9H9.5Z M5.5,11H7.5V13H5.5Z M9.5,11H18.5V13H9.5Z M5.5,15H7.5V17H5.5Z M9.5,15H18.5V17H9.5Z"   # the View Report box with a list (dots and lines) cut out, see New-DownloadButtonContent
 $script:iconExport   = "M14,3V5H17.59L12.67,9.91L14.08,11.32L19,6.41V10H21V3M19,19H5V5H12V3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V12H19V19Z"
 
 $script:idleStyleCache = @{}

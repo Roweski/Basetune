@@ -25,9 +25,9 @@ function Update-TenantListHint {
     if (-not $h -or -not $l) { return }
     $newForm = (-not $l.SelectedItem) -and (-not $AppState.editingTenantKey) -and
                $UI.pnlTenantForm -and $UI.pnlTenantForm.Visibility -eq 'Visible'
-    $h.Text       = if ($l.Items.Count -eq 0) { 'Add your first tenant below' }
-                    elseif ($newForm)         { 'Enter tenant details below' }   # after +
-                    else                      { 'Select a tenant' }
+    $h.Text       = if ($l.Items.Count -eq 0) { 'Add your first baseline below' }
+                    elseif ($newForm)         { 'Enter baseline details below' }   # after +
+                    else                      { 'Select a baseline' }
     $h.Visibility = if ($l.SelectedItem) { 'Collapsed' } else { 'Visible' }
     # + : off without tenants, and off while the form for a new tenant is
     # open (until Save, or until an existing tenant is picked).
@@ -73,9 +73,9 @@ function Reset-TenantFormState {
 }
 
 # Snapshot of the saved tenants, to log what a Save changed:
-#   Saved online tenant 'x' with authentication method 'Client Secret'
+#   Saved tenant 'x' with authentication method 'Client Secret'
 #   Saved offline baseline 'y'
-#   Removed online tenant 'z'   /   Removed offline baseline 'z'
+#   Removed tenant 'z'   /   Removed offline baseline 'z'
 # (Get-TenantSnapshot below; Reset-ChangedSides first.)
 
 # After a save or closing this window the main dropdowns are filled again
@@ -489,7 +489,7 @@ function Open-ConfigWindow {
             if ($AppState.configLoadErrorDetail) { Write-Log 'Config' "Details: $($AppState.configLoadErrorDetail)" 'ERROR' -FileOnly }
         } else {
             $n = @($AppState.tenantStore.Keys).Count
-            Clear-UILog 'Config' "Loaded $n $(if ($n -eq 1) { 'tenant' } else { 'tenants' }) from Config.json"
+            Clear-UILog 'Config' "Loaded $n $(if ($n -eq 1) { 'baseline' } else { 'baselines' }) from Config.json"
         }
     }
 
@@ -675,6 +675,8 @@ function Open-ConfigWindow {
         $key = $sel.Tag
         $node = $AppState.tenantStore[$key]
         if (-not $node) { return }
+        # The next open of the buttons-strip layers button starts here.
+        $AppState.lastPickedTenantKey = "$key"
         $AppState.suppressEvents = $true
         $AppState.editingTenantKey       = $key
         $UI.cfgTenantDisplayName.Text    = if ($node.displayName)    { $node.displayName    } else { '' }
@@ -769,10 +771,10 @@ function Open-ConfigWindow {
         # existing one that was edited in the form (also when the same value
         # is pasted again, e.g. to retry a failing connection). A tenant that
         # is just selected (e.g. while saving removals) gets neither.
-        #   Creating online tenant 'x'...  /  Updating offline baseline 'x'...
+        #   Creating tenant 'x'...  /  Updating offline baseline 'x'...
         #   Created folder: <path>          (offline, a folder Save created)
         #   Testing connection...           (online, then the Graph lines)
-        #   Saved online tenant 'x' with ... / Saved offline baseline 'x'
+        #   Saved tenant 'x' with ... / Saved offline baseline 'x'
         $testKey  = $AppState.editingTenantKey
         $testNode = if ($testKey) { $AppState.tenantStore[$testKey] } else { $null }
         $isNewTenant = $false
@@ -787,7 +789,7 @@ function Open-ConfigWindow {
         $isOnline = ($testNode -and $testNode.authMethod -and $testNode.authMethod -ne 'None')
         if ($isNewTenant -or $isChanged) {
             $tenantLabel = if ($testNode.displayName) { $testNode.displayName } else { $testKey }
-            $kind        = if ($isOnline) { 'online tenant' } else { 'offline baseline' }
+            $kind        = if ($isOnline) { 'tenant' } else { 'offline baseline' }
             Write-Log 'Config' $(if ($isNewTenant) { "Creating $kind '$tenantLabel'..." } else { "Updating $kind '$tenantLabel'..." })
         }
         # The folder of an offline baseline that Save-TenantForm created.
@@ -860,16 +862,16 @@ function Open-ConfigWindow {
             # tenant also names its authentication method.
             $before = $AppState.cfgTenantSnapshot
             $after  = Get-TenantSnapshot
-            $kindOf = { param($snap) if (-not $snap.Auth -or $snap.Auth -eq 'None') { 'offline baseline' } else { 'online tenant' } }
+            $kindOf = { param($snap) if (-not $snap.Auth -or $snap.Auth -eq 'None') { 'offline baseline' } else { 'tenant' } }
             foreach ($k in $after.Keys) {
                 $isNew     = -not $before.ContainsKey($k)
                 $isUpdated = -not $isNew -and ($before[$k].Sig -ne $after[$k].Sig -or $k -eq $secretChangedKey)
                 if (-not ($isNew -or $isUpdated)) { continue }
                 $kind = & $kindOf $after[$k]
-                if ($kind -eq 'online tenant') {
+                if ($kind -eq 'tenant') {
                     # Same text as the dropdown ("Client Secret"), not the Config.json value.
                     $authShown = if ($after[$k].Auth -eq 'ClientSecret') { 'Client Secret' } else { $after[$k].Auth }
-                    Write-Log 'Config' "Saved online tenant '$($after[$k].Name)' with authentication method '$authShown'"
+                    Write-Log 'Config' "Saved tenant '$($after[$k].Name)' with authentication method '$authShown'"
                 } else {
                     Write-Log 'Config' "Saved offline baseline '$($after[$k].Name)'"
                 }
@@ -901,7 +903,7 @@ function Open-ConfigWindow {
             # errors) belong to tenants that are gone. Start clean with the
             # same line as a first start (the log file keeps everything).
             if ($before.Count -gt 0 -and $after.Count -eq 0) {
-                Clear-UILog 'Config' 'Click the layers icon to configure a tenant and get started'
+                Clear-UILog 'Config' 'Click the layers icon to configure a baseline and get started'
             }
             Clear-UnsavedChanges
             # After a save: the saved tenant stays selected (the connection
@@ -938,12 +940,14 @@ function Open-ConfigWindow {
 
     $cfgWindow.Add_KeyDown({ param($s,$e); if ($e.Key -eq 'Escape') { $cfgWindow.Close() } })
     # Opens on: the tenant of -Side (the layers button of a tenant strip), or
-    # of the side used last (dropdown change or load, Source or Target, see
-    # $AppState.lastPickedTenantSide; the layers button of the buttons strip),
-    # otherwise Source, otherwise the first tenant; no tenants: empty form.
-    $pickSide = if ($Side) { $Side } else { $AppState.lastPickedTenantSide }
-    $sideCmb = if ($pickSide -eq 'Target') { $UI.cmbTargetTenant } else { $UI.cmbSourceTenant }
-    $openKey = if ($sideCmb -and $sideCmb.SelectedItem) { "$($sideCmb.SelectedItem.Tag)" }
+    # the baseline used last (picked in a dropdown, loaded, or selected in
+    # Baseline Configuration: $AppState.lastPickedTenantKey; the layers button
+    # of the buttons strip) while it still exists, otherwise Source's, otherwise
+    # the first tenant; no tenants: empty form.
+    $sideCmb = if ($Side -eq 'Target') { $UI.cmbTargetTenant } else { $UI.cmbSourceTenant }
+    $lastKey = $AppState.lastPickedTenantKey
+    $openKey = if (-not $Side -and $lastKey -and $AppState.tenantStore -and $AppState.tenantStore.Contains($lastKey)) { $lastKey }
+               elseif ($sideCmb -and $sideCmb.SelectedItem) { "$($sideCmb.SelectedItem.Tag)" }
                elseif ($UI.cmbSourceTenant -and $UI.cmbSourceTenant.SelectedItem) { "$($UI.cmbSourceTenant.SelectedItem.Tag)" }
                else { '' }
     Reset-TenantFormState -SelectKey $openKey
@@ -960,12 +964,12 @@ function Initialize-ConfigWindowEvents {
     if ($UI.btnSourceConfig) { $UI.btnSourceConfig.Add_Click({ Open-ConfigWindow -Side 'Source' }) }
     if ($UI.btnTargetConfig) { $UI.btnTargetConfig.Add_Click({ Open-ConfigWindow -Side 'Target' }) }
 
-    # The empty-card text "Configure a tenant to get started" is a link: click opens Baseline Configuration.
+    # The empty-card text "Configure a baseline to get started" is a link: click opens Baseline Configuration.
     foreach ($nmLbl in @($UI.lblSourceNoMatch, $UI.lblTargetNoMatch)) {
         if ($nmLbl) {
             $nmLbl.Add_MouseLeftButtonUp({
                 param($s, $e)
-                if ($s.Text -eq 'Configure a tenant to get started' -and -not $AppState.CurrentJob) { Open-ConfigWindow }
+                if ($s.Text -eq 'Configure a baseline to get started' -and -not $AppState.CurrentJob) { Open-ConfigWindow }
             })
         }
     }

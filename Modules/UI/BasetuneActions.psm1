@@ -90,11 +90,11 @@ function Start-Load {
     $selectedKey = $cmb.SelectedValue
 
     if (-not $selectedKey) {
-        Clear-UILog $Side "No $($Side.ToLowerInvariant()) tenant selected. Add a tenant via Baseline Configuration first"
+        Clear-UILog $Side "No $($Side.ToLowerInvariant()) baseline selected. Add a baseline via Baseline Configuration first"
         Set-Busy $false
         return
     }
-    $AppState.lastPickedTenantSide = $Side   # Baseline Configuration opens on the tenant loaded last
+    $AppState.lastPickedTenantKey = "$selectedKey"   # Baseline Configuration opens on the baseline loaded last
 
     $entry      = Get-TenantEntry $selectedKey
     $tenantNode = if ($entry) { $entry.Node } else { $null }
@@ -805,7 +805,7 @@ function Start-DefinitionDownload {
 
     $entry = Get-TenantEntry $pickedKey
     if (-not $entry -or (Get-TenantMode $entry.Node) -ne 'Online') {
-        Clear-UILog 'Download' "Download needs an online tenant (ClientSecret or Certificate)" 'ERROR'
+        Clear-UILog 'Download' "Download needs a tenant (ClientSecret or Certificate)" 'ERROR'
         return
     }
 

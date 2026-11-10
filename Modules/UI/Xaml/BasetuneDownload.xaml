@@ -66,8 +66,9 @@
             </Grid.RowDefinitions>
         <Border Grid.Row="0" Padding="10,10,10,15">
             <StackPanel>
-                <!-- Label above the dropdown, same style as the Options window (FL). -->
-                <TextBlock Style="{StaticResource FL}" Text="ONLINE TENANT"/>
+                <!-- Label above the dropdown (the tenant to download the definitions
+                     with), same style as the Options window (FL). -->
+                <TextBlock Style="{StaticResource FL}" Text="DOWNLOAD DEFINITIONS"/>
                 <Grid>
                     <ComboBox x:Name="cmbDownloadTenant"/>
                     <!-- Placeholder until a tenant is picked (Download stays disabled until then) -->

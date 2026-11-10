@@ -160,7 +160,7 @@ function Sync-MainTenantDropdowns {
     $selTgt = & $pick $PreferTgtTag $PrevTgtIndex
     Add-TenantItemsToDropdown $UI.cmbSourceTenant $selSrc
     Add-TenantItemsToDropdown $UI.cmbTargetTenant $selTgt
-    # Placeholder "No tenants configured..." only when there are no tenants
+    # Placeholder "No baselines configured" only when there are no tenants
     # (with tenants the first one is always selected).
     $hintVis = if (@($AppState.tenantStore.Keys).Count -gt 0) { 'Collapsed' } else { 'Visible' }
     foreach ($h in @($UI.txtSourceTenantHint, $UI.txtTargetTenantHint)) { if ($h) { $h.Visibility = $hintVis } }

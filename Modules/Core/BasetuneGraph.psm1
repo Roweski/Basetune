@@ -143,7 +143,7 @@ function New-GraphConnection {
     # instead of the generic "no response" below.
     if ($authMethod -notin @('ClientSecret', 'Certificate')) {
         $shown = if ($authMethod) { $authMethod } else { 'None' }
-        Write-Log $Label "Cannot connect: authMethod '$shown' is not valid for an online tenant (ClientSecret or Certificate)" $FailLevel
+        Write-Log $Label "Cannot connect: authMethod '$shown' is not valid for a tenant (ClientSecret or Certificate)" $FailLevel
         return $null
     }
     if (-not $tenantId -or -not $clientId) {

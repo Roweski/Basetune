@@ -108,8 +108,8 @@
                             <Grid Grid.Column="2">
                                 <ComboBox x:Name="cmbSourceTenant" TabIndex="1" Style="{StaticResource StripCombo}"
                                           ToolTip="{Binding SelectedItem.Content, RelativeSource={RelativeSource Self}}"/>
-                                <!-- Placeholder when Config.json has no tenants (Sync-MainTenantDropdowns) -->
-                                <TextBlock x:Name="txtSourceTenantHint" Text="No tenants configured" Visibility="Collapsed"
+                                <!-- Placeholder when Config.json has no baselines (Sync-MainTenantDropdowns) -->
+                                <TextBlock x:Name="txtSourceTenantHint" Text="No baselines configured" Visibility="Collapsed"
                                            Style="{StaticResource HintText}" Margin="14,0,0,0"/>
                             </Grid>
                             <Rectangle Grid.Column="3" Style="{StaticResource StripSep}"/>
@@ -371,8 +371,8 @@
                                                 <Setter Property="ToolTip" Value="{x:Null}"/>
                                                 <Setter Property="IsHitTestVisible" Value="False"/>
                                             </Trigger>
-                                            <!-- "Configure a tenant to get started": clickable, opens Baseline Configuration -->
-                                            <Trigger Property="Text" Value="Configure a tenant to get started">
+                                            <!-- "Configure a baseline to get started": clickable, opens Baseline Configuration -->
+                                            <Trigger Property="Text" Value="Configure a baseline to get started">
                                                 <Setter Property="ToolTip" Value="Open Baseline Configuration"/>
                                                 <Setter Property="Cursor" Value="Hand"/>
                                                 <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>
@@ -420,8 +420,8 @@
                             <Grid Grid.Column="2">
                                 <ComboBox x:Name="cmbTargetTenant" TabIndex="5" Style="{StaticResource StripCombo}"
                                           ToolTip="{Binding SelectedItem.Content, RelativeSource={RelativeSource Self}}"/>
-                                <!-- Placeholder when Config.json has no tenants (Sync-MainTenantDropdowns) -->
-                                <TextBlock x:Name="txtTargetTenantHint" Text="No tenants configured" Visibility="Collapsed"
+                                <!-- Placeholder when Config.json has no baselines (Sync-MainTenantDropdowns) -->
+                                <TextBlock x:Name="txtTargetTenantHint" Text="No baselines configured" Visibility="Collapsed"
                                            Style="{StaticResource HintText}" Margin="14,0,0,0"/>
                             </Grid>
                             <Rectangle Grid.Column="3" Style="{StaticResource StripSep}"/>
@@ -680,8 +680,8 @@
                                                 <Setter Property="ToolTip" Value="{x:Null}"/>
                                                 <Setter Property="IsHitTestVisible" Value="False"/>
                                             </Trigger>
-                                            <!-- "Configure a tenant to get started": clickable, opens Baseline Configuration -->
-                                            <Trigger Property="Text" Value="Configure a tenant to get started">
+                                            <!-- "Configure a baseline to get started": clickable, opens Baseline Configuration -->
+                                            <Trigger Property="Text" Value="Configure a baseline to get started">
                                                 <Setter Property="ToolTip" Value="Open Baseline Configuration"/>
                                                 <Setter Property="Cursor" Value="Hand"/>
                                                 <Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/>

@@ -19,8 +19,8 @@ function Show-BasetuneCliHelp {
     Write-Host "  .\BasetuneCLI.ps1 -Source <id> -Target <id> [parameters]"
     Write-Host ""
     Write-Host "COMPARE" -ForegroundColor Yellow
-    Write-Host "  -Source       <id>     Source tenant ID from Config.json (required)"
-    Write-Host "  -Target       <id>     Target tenant ID from Config.json (required)"
+    Write-Host "  -Source       <id>     Source baseline ID from Config.json (required)"
+    Write-Host "  -Target       <id>     Target baseline ID from Config.json (required)"
     Write-Host "  -SourceFilter <text>   Filter source policies by name before loading"
     Write-Host "  -TargetFilter <text>   Filter target policies by name before loading"
     Write-Host "  -ReportPath   <path>   Override report output folder for this run"
@@ -29,16 +29,16 @@ function Show-BasetuneCliHelp {
     Write-Host "  -Platforms    <list>   Comma-separated: windows,macos,ios,android,linux (default: windows)"
     Write-Host ""
     Write-Host "EXPORT" -ForegroundColor Yellow
-    Write-Host "  -Export       <id>     Export policies from this tenant ID to JSON files"
+    Write-Host "  -Export       <id>     Export policies from this tenant (baseline ID) to JSON files"
     Write-Host "  -ExportPath   <path>   Output folder (required)"
     Write-Host "  -ExportFilter <text>   Filter policies by name before exporting"
     Write-Host "  -Platforms    <list>   Comma-separated: windows,macos,ios,android,linux (default: windows)"
     Write-Host ""
     Write-Host "DOWNLOAD" -ForegroundColor Yellow
-    Write-Host "  -Download     <id>     Download setting definitions and categories using this online tenant ID"
+    Write-Host "  -Download     <id>     Download setting and category definitions using this tenant (baseline ID)"
     Write-Host ""
     Write-Host "INFO" -ForegroundColor Yellow
-    Write-Host "  -TenantList            List all configured tenants with IDs and authentication methods"
+    Write-Host "  -BaselineList          List all configured baselines with IDs and authentication methods (alias: -TenantList)"
     Write-Host "  -? / -Help             Show this help"
     Write-Host ""
     Write-Host "EXAMPLES" -ForegroundColor Yellow
@@ -48,7 +48,7 @@ function Show-BasetuneCliHelp {
     Write-Host "  .\BasetuneCLI.ps1 -Export <id> -ExportPath C:\MyExport"
     Write-Host "  .\BasetuneCLI.ps1 -Export <id> -ExportPath C:\MyExport -ExportFilter Win-L2"
     Write-Host "  .\BasetuneCLI.ps1 -Download <id>"
-    Write-Host "  .\BasetuneCLI.ps1 -TenantList"
+    Write-Host "  .\BasetuneCLI.ps1 -BaselineList"
     Write-Host ""
 }
 
@@ -105,8 +105,11 @@ $cli = {
         [string]$Download,
 
         # ── INFO ──────────────────────────────────────────────────────────────────
-        [Parameter(ParameterSetName='TenantList', Mandatory)]
-        [switch]$TenantList
+        # -TenantList (the name of the "tenant" block in Config.json) still works,
+        # so scripts that use it do not break.
+        [Parameter(ParameterSetName='BaselineList', Mandatory)]
+        [Alias('TenantList')]
+        [switch]$BaselineList
     )
 
     # ==============================================
@@ -196,7 +199,7 @@ $cli = {
     }
 
     # The report folder is created only when a compare actually writes a report
-    # (see COMPARE + EXPORT), not for -TenantList / -Download / export runs.
+    # (see COMPARE + EXPORT), not for -BaselineList / -Download / export runs.
     New-Item -ItemType Directory -Path $definitionsPath -Force | Out-Null
 
     # Fetched categories are always saved to categories.json (the definitions
@@ -235,14 +238,14 @@ $cli = {
         }
         foreach ($tenantRef in @(@{ Id = $Source; Node = $cfg.source }, @{ Id = $Target; Node = $cfg.target })) {
             if ($tenantRef.Node) { continue }
-            $msg = if (& $rawTenantExists $tenantRef.Id) { "Tenant with id '$($tenantRef.Id)' is incomplete in Config.json (tenantId, clientId, clientSecret or certThumbprint is empty)" }
-                   else                             { "Tenant with id '$($tenantRef.Id)' not found in Config.json" }
+            $msg = if (& $rawTenantExists $tenantRef.Id) { "Baseline with id '$($tenantRef.Id)' is incomplete in Config.json (tenantId, clientId, clientSecret or certThumbprint is empty)" }
+                   else                             { "Baseline with id '$($tenantRef.Id)' not found in Config.json" }
             if (-not $configErrors.Contains($msg)) { $configErrors.Add($msg) }
         }
 
         if ($configErrors.Count -gt 0) {
             foreach ($e in $configErrors) { Write-Log "Config" $e "ERROR" }
-            Write-Log "Config" "Use -TenantList to list all configured tenant IDs" "INFO"
+            Write-Log "Config" "Use -BaselineList to list all configured baseline IDs" "INFO"
             exit 1
         }
 
@@ -305,9 +308,9 @@ $cli = {
 
     # Execution-speed throttling off for the whole run, also when the terminal
     # is not in the foreground (Windows can otherwise apply it, see
-    # Set-ProcessPowerThrottling). Not for -TenantList: nothing to speed up.
+    # Set-ProcessPowerThrottling). Not for -BaselineList: nothing to speed up.
     # The process ends with the run, so there is nothing to switch back.
-    if (-not $TenantList) { Set-ProcessPowerThrottling -Enabled $false }
+    if (-not $BaselineList) { Set-ProcessPowerThrottling -Enabled $false }
 
     # ==============================================
     # DOWNLOAD MODE (Definitions / Categories)
@@ -322,11 +325,11 @@ $cli = {
             $downloadConfig = $rawCfg.tenant.PSObject.Properties[$Download].Value
         }
         if (-not $downloadConfig) {
-            Write-Log "Download" "Tenant '$Download' not found in Config.json. Use -TenantList to list all configured tenant IDs" "ERROR"
+            Write-Log "Download" "Baseline '$Download' not found in Config.json. Use -BaselineList to list all configured baseline IDs" "ERROR"
             exit 1
         }
         if ((Get-TenantMode $downloadConfig) -ne 'Online') {
-            Write-Log "Download" "Tenant '$Download' is an offline baseline. Download needs an online tenant (ClientSecret or Certificate)" "ERROR"
+            Write-Log "Download" "'$Download' is an offline baseline. Download needs a tenant (ClientSecret or Certificate)" "ERROR"
             exit 1
         }
         $downloadLabel = if ($downloadConfig.PSObject.Properties['displayName'] -and $downloadConfig.displayName) { $downloadConfig.displayName } else { 'tenant' }
@@ -353,10 +356,10 @@ $cli = {
     }
 
     # ==============================================
-    # TENANTS LIST MODE
+    # BASELINE LIST MODE (-BaselineList / -TenantList)
     # ==============================================
 
-    if ($TenantList) {
+    if ($BaselineList) {
         # One table, sorted by Id: numeric ids in numeric order (1, 2, 10),
         # other ids after them, alphabetically.
         $rows = @()
@@ -372,7 +375,7 @@ $cli = {
             })
         }
         if ($rows.Count -eq 0) {
-            Write-Host "No tenants configured. Add a tenant via Baseline Configuration in the UI."
+            Write-Host "No baselines configured. Add a baseline via Baseline Configuration in the UI."
             exit
         }
         $num  = 0
@@ -388,7 +391,7 @@ $cli = {
         Write-Host (& $fmt ($cols | ForEach-Object { '-' * $_.Length }))
         foreach ($r in $rows) { Write-Host (& $fmt @($r.Id, $r.Name, $r.Auth, $r.Type)) }
         Write-Host ""
-        $noun = if ($rows.Count -eq 1) { 'tenant' } else { 'tenants' }
+        $noun = if ($rows.Count -eq 1) { 'baseline' } else { 'baselines' }
         Write-Host "$($rows.Count) $noun. Use the Id with -Source / -Target, -Export or -Download."
         exit
     }
@@ -427,7 +430,7 @@ $cli = {
             $exportNode = $rawCfg.tenant.PSObject.Properties[$Export].Value
         }
         if (-not $exportNode) {
-            Write-Log "Export" "Tenant '$Export' not found in Config.json. Use -TenantList to list all configured tenant IDs" "ERROR"
+            Write-Log "Export" "Baseline '$Export' not found in Config.json. Use -BaselineList to list all configured baseline IDs" "ERROR"
             exit 1
         }
 
@@ -437,7 +440,7 @@ $cli = {
         # Offline baselines can't be exported — their data already lives on disk as
         # JSON files. The user can copy those directly instead of re-exporting.
         if ($exportOrigin -ne 'Online') {
-            Write-Log "Export" "Tenant '$exportLabel' is an offline baseline. Export is only available for online tenants. Copy the existing JSON files directly if you need them elsewhere" "ERROR"
+            Write-Log "Export" "'$exportLabel' is an offline baseline. Export is only available for tenants. Copy the existing JSON files directly if you need them elsewhere" "ERROR"
             exit 1
         }
 

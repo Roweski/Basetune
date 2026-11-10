@@ -289,12 +289,12 @@ function Update-FilterIcon {
 # Empty list + a tenant: "Ready to load source policies" / "... target
 # policies" (the side in the text, so the empty cards say which is which);
 # no tenant configured:
-# "Configure a tenant to get started"; a load on that side: "Loading policies"
+# "Configure a baseline to get started"; a load on that side: "Loading policies"
 # / "Loading policies with name filter 'x'". A "No ... matching 'x'" message from
 # a load that found nothing is kept, unless -Force (tenant switch, typing in
 # that side's filter).
 $script:ReadyText    = @{ Source = 'Ready to load source policies'; Target = 'Ready to load target policies' }
-$script:NoTenantText = 'Configure a tenant to get started'   # clickable (XAML trigger on this exact text + click handler in BasetuneUI.ps1)
+$script:NoTenantText = 'Configure a baseline to get started'   # clickable (XAML trigger on this exact text + click handler in BasetuneUI.ps1)
 function Get-LoadingCardText {
     param([string]$Filter)
     if ($Filter) { "Loading policies with name filter '$Filter'" } else { 'Loading policies' }
@@ -729,14 +729,15 @@ function Initialize-PolicyListEvents {
     }
 
     # ── Tenant dropdown changes ───────────────────────────────────────────────────
-    # Baseline Configuration opens on the tenant of the side the user used last
-    # (dropdown change or a load); Source at start. Selections made by
-    # Basetune itself (start-up, after a save) do not count.
-    $AppState.lastPickedTenantSide = 'Source'
+    # Baseline Configuration (the layers button of the buttons strip) opens on
+    # the baseline the user used last: picked in a dropdown, loaded, or
+    # selected in Baseline Configuration ($AppState.lastPickedTenantKey, see
+    # Open-ConfigWindow). Selections made by Basetune itself (start-up, after
+    # a save) do not count.
     $UI.cmbSourceTenant.Add_SelectionChanged({
         $newKey = if ($UI.cmbSourceTenant.SelectedItem) { $UI.cmbSourceTenant.SelectedItem.Tag } else { $null }
         if (-not $AppState.suppressEvents -and $UI.Window.IsLoaded -and $newKey -and $newKey -ne $AppState.lastSourceTenantKey) {
-            $AppState.lastPickedTenantSide = 'Source'
+            $AppState.lastPickedTenantKey = "$newKey"
         }
         if (-not $AppState.suppressEvents -and $newKey -ne $AppState.lastSourceTenantKey) { Reset-Side 'Source' }
         $AppState.lastSourceTenantKey = $newKey
@@ -745,7 +746,7 @@ function Initialize-PolicyListEvents {
     $UI.cmbTargetTenant.Add_SelectionChanged({
         $newKey = if ($UI.cmbTargetTenant.SelectedItem) { $UI.cmbTargetTenant.SelectedItem.Tag } else { $null }
         if (-not $AppState.suppressEvents -and $UI.Window.IsLoaded -and $newKey -and $newKey -ne $AppState.lastTargetTenantKey) {
-            $AppState.lastPickedTenantSide = 'Target'
+            $AppState.lastPickedTenantKey = "$newKey"
         }
         if (-not $AppState.suppressEvents -and $newKey -ne $AppState.lastTargetTenantKey) { Reset-Side 'Target' }
         $AppState.lastTargetTenantKey = $newKey

@@ -96,11 +96,14 @@
         <Setter Property="Data" Value="M3,17V19H9V17H3M3,5V7H13V5H3M13,21V19H21V17H13V15H11V21H13M7,9V11H3V13H7V15H9V9H7M21,13V11H11V13H21M15,9H17V7H21V5H17V3H15V9Z"/>
     </Style>
     <!-- Download Definitions: the filled box of View Report (3..21, corners 2) with a
-         list cut out (even-odd fill): three dots and three lines with round ends.
+         list cut out (even-odd fill): three square dots (2 x 2) and three lines of 2,
+         square as the lines of View Details and on its rows (y 7, 11, 15): dots
+         5.5..7.5, lines 9.5..18.5, so the room left and right inside the box is
+         the same (2.5).
          New-DownloadButtonContent builds the same icon from code. -->
     <Style x:Key="IconDownload" TargetType="Path">
         <Setter Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/>
-        <Setter Property="Data" Value="M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3Z M7.4,7.3A1.3,1.3 0 1,1 7.4,9.9A1.3,1.3 0 1,1 7.4,7.3Z M11.25,7.75H16.35A0.85,0.85 0 0,1 16.35,9.45H11.25A0.85,0.85 0 0,1 11.25,7.75Z M7.4,10.7A1.3,1.3 0 1,1 7.4,13.3A1.3,1.3 0 1,1 7.4,10.7Z M11.25,11.15H16.35A0.85,0.85 0 0,1 16.35,12.85H11.25A0.85,0.85 0 0,1 11.25,11.15Z M7.4,14.1A1.3,1.3 0 1,1 7.4,16.7A1.3,1.3 0 1,1 7.4,14.1Z M11.25,14.55H16.35A0.85,0.85 0 0,1 16.35,16.25H11.25A0.85,0.85 0 0,1 11.25,14.55Z"/>
+        <Setter Property="Data" Value="M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3Z M5.5,7H7.5V9H5.5Z M9.5,7H18.5V9H9.5Z M5.5,11H7.5V13H5.5Z M9.5,11H18.5V13H9.5Z M5.5,15H7.5V17H5.5Z M9.5,15H18.5V17H9.5Z"/>
     </Style>
     <!-- Open Basetune.log: the outline of View Details (3..21, corners 2, walls 2)
          with only its short line (7..14, 7..9) at the top left, filled path. -->
